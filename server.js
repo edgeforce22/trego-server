@@ -1,17 +1,17 @@
 // Trego Server
+const dotenv = require("dotenv");
+dotenv.config();
 
 // Variable Declaration
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
-const dotenv = require("dotenv");
 const cookieParser = require("cookie-parser");
 const startAutoCompleteJob = require("./utils/cron/autoCompleteJob");
 const http = require("http");
 const { initSocket } = require("./utils/socket/socket");
 
 // Server Creation
-dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
