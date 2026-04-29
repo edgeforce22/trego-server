@@ -47,10 +47,12 @@ mongoose
 // Request routing
 const customerAuth = require("./routes/customer/auth")
 const mechanicAuth = require("./routes/mechanic/auth")
+const adminAuth = require("./routes/admin/auth")
 
 // APIs
 app.use("/api/customer/auth", customerAuth);
 app.use("/api/mechanic/auth", mechanicAuth);
+app.use("/api/admin/dashboard", adminAuth);
 
 // Server listening
 server.listen(PORT, "0.0.0.0", () => {
