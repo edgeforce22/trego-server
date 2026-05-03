@@ -1231,6 +1231,8 @@ router.post("/getServiceRequestHistory", async (req, res) => {
                     problemDescription:
                         request.problemDescription,
 
+                    isSOS: request.isSOS,
+
                     status: request.status,
                     totalPrice: request.totalPrice,
                     totalDistance: request.totalDistance,
