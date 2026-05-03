@@ -723,7 +723,7 @@ router.post("/nearbyShops", async (req, res) => {
 
 
 
-const { emitNewRequest } = require("../../utils/socket/socket");
+const { emitNewRequest, emitRemoveRequest } = require("../../utils/socket/socket");
 
 router.post("/createRequest", async (req, res) => {
 
@@ -859,9 +859,10 @@ router.post("/sendSOS", async (req, res) => {
 
     try {
 
-        const { customerId, latitude, longitude, problemTypes } = req.body;
+        const { customerId, latitude, longitude, address, problemTypes } = req.body;
 
-        if (!customerId || !latitude || !longitude || !problemTypes?.length) {
+        if (!customerId || !latitude || !longitude || !address || !problemTypes?.length) {
+            console.log("Missing required field :", req.body);
             return res.status(400).json(
                 ApiResponse.error("Missing required fields", 400)
             );
@@ -870,6 +871,7 @@ router.post("/sendSOS", async (req, res) => {
         const lat = parseFloat(latitude);
         const lng = parseFloat(longitude);
 
+        console.log("SOS Sent Data : ", req.body);
         // ================= FIND NEARBY SHOPS =================
         const nearbyShops = await Shop.aggregate([
             {
@@ -887,6 +889,7 @@ router.post("/sendSOS", async (req, res) => {
         ]);
 
         if (!nearbyShops.length) {
+            console.log("No nearby mechanics found");
             return res.status(404).json(
                 ApiResponse.error("No nearby mechanics found", 404)
             );
@@ -899,8 +902,11 @@ router.post("/sendSOS", async (req, res) => {
             status: "requested",   // 🔥 IMPORTANT (match your system)
             isSOS: true,
 
+
+            sentShopIds: nearbyShops.map(shop => shop._id),
+
             customerLocation: {
-                address: "Live Location",
+                address: address,
                 location: {
                     type: "Point",
                     coordinates: [lng, lat]
@@ -920,7 +926,7 @@ router.post("/sendSOS", async (req, res) => {
             customerLocation: {
                 latitude: lat,
                 longitude: lng,
-                address: "Live Location"
+                address: address
             },
 
             createdAt: request.createdAt
@@ -932,9 +938,10 @@ router.post("/sendSOS", async (req, res) => {
             emitNewRequest(shop._id, socketData);
         });
 
+        console.log("SOS sent successfully :", nearbyShops);
         return res.status(201).json(
             ApiResponse.success("SOS sent successfully", {
-                requestId: request._id
+                id: request._id
             })
         );
 
@@ -947,30 +954,162 @@ router.post("/sendSOS", async (req, res) => {
 });
 
 
+// router.post("/getServiceRequest", async (req, res) => {
+//     console.log("-----API Get Service Request By ID-----");
 
-// ================= Get Service Request By ID =================
+//     try {
+//         const { id } = req.body;
+
+//         if (!id) {
+//             return res.status(400).json(
+//                 ApiResponse.error("Request ID is required", 400)
+//             );
+//         }
+
+//         const request = await ServiceRequest.findById(id);
+
+//         if (!request) {
+//             return res.status(404).json(
+//                 ApiResponse.error("Service request not found", 404)
+//             );
+//         }
+
+//         const shop = await Shop.findById(request.shopId);
+//         const service = await Services.findById(request.serviceId);
+
+//         // ===============================
+//         // Calculate total mechanics
+//         // ===============================
+
+//         let totalMechanics = 0;
+//         let rejectedCount = 0;
+//         let isCompletelyRejected = false;
+
+//         if (shop) {
+//             const allMembers = [
+//                 shop.ownerId?.toString(),
+//                 ...(shop.workers || []).map(id => id.toString())
+//             ];
+
+//             // remove duplicates
+//             const uniqueMembers = [...new Set(allMembers)];
+
+//             totalMechanics = uniqueMembers.length;
+
+//             rejectedCount = (request.rejectedBy || []).length;
+
+//             isCompletelyRejected =
+//                 rejectedCount >= totalMechanics &&
+//                 totalMechanics > 0 &&
+//                 request.status === "requested";
+//         }
+
+//         const response = {
+//             _id: request._id,
+//             customerId: request.customerId,
+//             shopId: request.shopId,
+//             mechanicId: request.mechanicId,
+//             vehicleId: request.vehicleId,
+//             serviceId: request.serviceId,
+
+//             shopName: shop ? shop.shopName : "",
+//             serviceName: service ? service.service : "",
+
+//             problemDescription: request.problemDescription,
+//             status: request.status,
+//             totalPrice: request.totalPrice,
+//             totalDistance: request.totalDistance,
+//             totalDuration: request.totalDuration,
+//             paymentStatus: request.paymentStatus,
+
+//             rejectedCount,
+//             totalMechanics,
+//             isCompletelyRejected,
+
+//             customerLocation: request.customerLocation ? {
+//                 latitude: request.customerLocation.location.coordinates[1],
+//                 longitude: request.customerLocation.location.coordinates[0],
+//                 address: request.customerLocation.address
+//             } : null,
+
+//             mechanicLocation:
+//                 request.mechanicLocation?.location?.coordinates ? {
+//                     latitude: request.mechanicLocation.location.coordinates[1],
+//                     longitude: request.mechanicLocation.location.coordinates[0],
+//                     address: request.mechanicLocation.address
+//                 } : null,
+
+//             createdAt: request.createdAt
+//         };
+
+//         console.log("Service Request Data :", response)
+//         return res.status(200).json(
+//             ApiResponse.success(
+//                 "Service request fetched successfully",
+//                 response
+//             )
+//         );
+
+//     } catch (err) {
+//         console.error(err);
+
+//         return res.status(500).json(
+//             ApiResponse.error("Server error", 500)
+//         );
+//     }
+// });
+
+
+// ================= Get Service Request By Id =================
 router.post("/getServiceRequest", async (req, res) => {
     console.log("-----API Get Service Request By ID-----");
 
     try {
-
         const { id } = req.body;
 
-        const requestId = id;
-        if (!requestId) {
-            console.log("Request ID is required!", requestId);
+        if (!id) {
             return res.status(400).json(
                 ApiResponse.error("Request ID is required", 400)
             );
         }
 
-        const request = await ServiceRequest.findById(requestId);
+        const request = await ServiceRequest.findById(id);
 
         if (!request) {
-            console.log("Request ID is required!", request);
             return res.status(404).json(
                 ApiResponse.error("Service request not found", 404)
             );
+        }
+
+        // Get shop name and service name using IDs
+        const shop = await Shop.findById(request.shopId).select("shopName ownerId workers");
+        const service = await Services.findById(request.serviceId).select("service");
+
+        // ===============================
+        // Calculate total mechanics
+        // ===============================
+
+        let totalMechanics = 0;
+        let rejectedCount = 0;
+        let isCompletelyRejected = false;
+
+        if (shop) {
+            const allMembers = [
+                shop.ownerId?.toString(),
+                ...(shop.workers || []).map(id => id.toString())
+            ];
+
+            // Remove duplicate members
+            const uniqueMembers = [...new Set(allMembers)];
+
+            totalMechanics = uniqueMembers.length;
+
+            rejectedCount = (request.rejectedBy || []).length;
+
+            isCompletelyRejected =
+                rejectedCount >= totalMechanics &&
+                totalMechanics > 0 &&
+                request.status === "requested";
         }
 
         const response = {
@@ -980,6 +1119,11 @@ router.post("/getServiceRequest", async (req, res) => {
             mechanicId: request.mechanicId,
             vehicleId: request.vehicleId,
             serviceId: request.serviceId,
+
+            // Added Names
+            shopName: shop ? shop.shopName : "",
+            serviceName: service ? service.service : "",
+
             problemDescription: request.problemDescription,
             status: request.status,
             totalPrice: request.totalPrice,
@@ -987,24 +1131,148 @@ router.post("/getServiceRequest", async (req, res) => {
             totalDuration: request.totalDuration,
             paymentStatus: request.paymentStatus,
 
-            customerLocation: request.customerLocation ? {
-                latitude: request.customerLocation.location.coordinates[1],
-                longitude: request.customerLocation.location.coordinates[0],
-                address: request.customerLocation.address
-            } : null,
+            rejectedCount,
+            totalMechanics,
+            isCompletelyRejected,
 
-            mechanicLocation: request.mechanicLocation?.location?.coordinates ? {
-                latitude: request.mechanicLocation.location.coordinates[1],
-                longitude: request.mechanicLocation.location.coordinates[0],
-                address: request.mechanicLocation.address
-            } : null,
+            customerLocation: request.customerLocation
+                ? {
+                    latitude:
+                        request.customerLocation.location.coordinates[1],
+                    longitude:
+                        request.customerLocation.location.coordinates[0],
+                    address: request.customerLocation.address
+                }
+                : null,
+
+            mechanicLocation:
+                request.mechanicLocation?.location?.coordinates
+                    ? {
+                        latitude:
+                            request.mechanicLocation.location.coordinates[1],
+                        longitude:
+                            request.mechanicLocation.location.coordinates[0],
+                        address: request.mechanicLocation.address
+                    }
+                    : null,
 
             createdAt: request.createdAt
         };
 
-        console.log("Service request fetched successfully", response);
+        console.log("Service Request Data :", response);
+
         return res.status(200).json(
-            ApiResponse.success("Service request fetched successfully", response)
+            ApiResponse.success(
+                "Service request fetched successfully",
+                response
+            )
+        );
+
+    } catch (err) {
+        console.error(err);
+
+        return res.status(500).json(
+            ApiResponse.error("Server error", 500)
+        );
+    }
+});
+
+
+// ================= Get Service Request History =================
+router.post("/getServiceRequestHistory", async (req, res) => {
+    console.log("-----API Get Service Request History-----");
+
+    try {
+
+        const { id } = req.body;
+
+        if (!id) {
+            return res.status(400).json(
+                ApiResponse.error("Customer ID is required", 400)
+            );
+        }
+
+        const allowedStatus = [
+            "accepted",
+            "in_progress",
+            "waiting_for_confirmation",
+            "completed",
+            "cancelled"
+        ];
+
+        const requests = await ServiceRequest.find({
+            customerId: id,
+            status: { $in: allowedStatus }
+        }).sort({ createdAt: -1 });
+
+        const response = await Promise.all(
+            requests.map(async (request) => {
+
+                const shop =
+                    await Shop.findById(request.shopId);
+
+                const service =
+                    await Services.findById(request.serviceId);
+
+                return {
+                    _id: request._id,
+                    customerId: request.customerId,
+                    shopId: request.shopId,
+                    mechanicId: request.mechanicId,
+                    vehicleId: request.vehicleId,
+                    serviceId: request.serviceId,
+
+                    shopName:
+                        shop ? shop.shopName : "",
+
+                    serviceName:
+                        service ? service.service : "",
+
+                    problemDescription:
+                        request.problemDescription,
+
+                    status: request.status,
+                    totalPrice: request.totalPrice,
+                    totalDistance: request.totalDistance,
+                    totalDuration: request.totalDuration,
+                    paymentStatus: request.paymentStatus,
+
+                    customerLocation:
+                        request.customerLocation ? {
+                            latitude:
+                                request.customerLocation
+                                    .location.coordinates[1],
+                            longitude:
+                                request.customerLocation
+                                    .location.coordinates[0],
+                            address:
+                                request.customerLocation
+                                    .address
+                        } : null,
+
+                    mechanicLocation:
+                        request.mechanicLocation?.location?.coordinates ? {
+                            latitude:
+                                request.mechanicLocation
+                                    .location.coordinates[1],
+                            longitude:
+                                request.mechanicLocation
+                                    .location.coordinates[0],
+                            address:
+                                request.mechanicLocation
+                                    .address
+                        } : null,
+
+                    createdAt: request.createdAt
+                };
+            })
+        );
+
+        return res.status(200).json(
+            ApiResponse.success(
+                "Service request history fetched successfully",
+                response
+            )
         );
 
     } catch (err) {
@@ -1017,6 +1285,163 @@ router.post("/getServiceRequest", async (req, res) => {
     }
 });
 
+
+
+
+
+// // ================= Get Service Request By ID =================
+// router.post("/getServiceRequest", async (req, res) => {
+//     console.log("-----API Get Service Request By ID-----");
+
+//     try {
+
+//         const { id } = req.body;
+
+//         const requestId = id;
+//         if (!requestId) {
+//             console.log("Request ID is required!", requestId);
+//             return res.status(400).json(
+//                 ApiResponse.error("Request ID is required", 400)
+//             );
+//         }
+
+//         const request = await ServiceRequest.findById(requestId);
+
+//         if (!request) {
+//             console.log("Request ID is required!", request);
+//             return res.status(404).json(
+//                 ApiResponse.error("Service request not found", 404)
+//             );
+//         }
+
+//         const response = {
+//             _id: request._id,
+//             customerId: request.customerId,
+//             shopId: request.shopId,
+//             mechanicId: request.mechanicId,
+//             vehicleId: request.vehicleId,
+//             serviceId: request.serviceId,
+//             problemDescription: request.problemDescription,
+//             status: request.status,
+//             totalPrice: request.totalPrice,
+//             totalDistance: request.totalDistance,
+//             totalDuration: request.totalDuration,
+//             paymentStatus: request.paymentStatus,
+
+//             customerLocation: request.customerLocation ? {
+//                 latitude: request.customerLocation.location.coordinates[1],
+//                 longitude: request.customerLocation.location.coordinates[0],
+//                 address: request.customerLocation.address
+//             } : null,
+
+//             mechanicLocation: request.mechanicLocation?.location?.coordinates ? {
+//                 latitude: request.mechanicLocation.location.coordinates[1],
+//                 longitude: request.mechanicLocation.location.coordinates[0],
+//                 address: request.mechanicLocation.address
+//             } : null,
+
+//             createdAt: request.createdAt
+//         };
+
+//         console.log("Service request fetched successfully", response);
+//         return res.status(200).json(
+//             ApiResponse.success("Service request fetched successfully", response)
+//         );
+
+//     } catch (err) {
+
+//         console.error(err);
+
+//         return res.status(500).json(
+//             ApiResponse.error("Server error", 500)
+//         );
+//     }
+// });
+
+// router.post("/getServiceRequestHistory", async (req, res) => {
+//     console.log("-----API Get Service Request History-----");
+
+//     try {
+
+//         const { id } = req.body;
+
+//         const customerId = id;
+//         if (!customerId) {
+//             console.log("Customer ID is required!");
+//             return res.status(400).json(
+//                 ApiResponse.error("Customer ID is required", 400)
+//             );
+//         }
+
+//         const allowedStatus = [
+//             "accepted",
+//             "in_progress",
+//             "waiting_for_confirmation",
+//             "completed",
+//             "cancelled"
+//         ];
+
+//         const requests = await ServiceRequest.find({
+//             customerId: customerId,
+//             status: { $in: allowedStatus }
+//         }).sort({ createdAt: -1 });
+
+//         const response = requests.map(request => ({
+//             _id: request._id,
+//             customerId: request.customerId,
+//             shopId: request.shopId,
+//             mechanicId: request.mechanicId,
+//             vehicleId: request.vehicleId,
+//             serviceId: request.serviceId,
+//             problemDescription: request.problemDescription,
+//             status: request.status,
+//             totalPrice: request.totalPrice,
+//             totalDistance: request.totalDistance,
+//             totalDuration: request.totalDuration,
+//             paymentStatus: request.paymentStatus,
+
+//             customerLocation: request.customerLocation ? {
+//                 latitude:
+//                     request.customerLocation.location.coordinates[1],
+//                 longitude:
+//                     request.customerLocation.location.coordinates[0],
+//                 address:
+//                     request.customerLocation.address
+//             } : null,
+
+//             mechanicLocation:
+//                 request.mechanicLocation?.location?.coordinates ? {
+//                     latitude:
+//                         request.mechanicLocation.location.coordinates[1],
+//                     longitude:
+//                         request.mechanicLocation.location.coordinates[0],
+//                     address:
+//                         request.mechanicLocation.address
+//                 } : null,
+
+//             createdAt: request.createdAt
+//         }));
+
+//         console.log(
+//             "Service request history fetched successfully"
+//         );
+
+//         return res.status(200).json(
+//             ApiResponse.success(
+//                 "Service request history fetched successfully",
+//                 response
+//             )
+//         );
+
+//     } catch (err) {
+
+//         console.error(err);
+
+//         return res.status(500).json(
+//             ApiResponse.error("Server error", 500)
+//         );
+//     }
+// });
 
 // ================= Customer Cancel Request =================
 router.post("/cancelRequestedService", async (req, res) => {
@@ -1079,6 +1504,35 @@ router.post("/cancelRequestedService", async (req, res) => {
         // }
 
         // =========================================================
+
+
+        if (request.isSOS) {
+
+            // Remove from ALL shop dashboards
+            if (request.sentShopIds?.length) {
+
+                request.sentShopIds.forEach(shopId => {
+                    emitRemoveRequest(shopId, request._id);
+                });
+            }
+
+        } else {
+
+            // Normal request remove from one shop
+            emitRemoveRequest(request.shopId, request._id);
+        }
+
+        await sendNotificationToShop(request.shopId, {
+            title: "Service Request Cancelled",
+            body: "The request was cancelled because it had not been accepted yet",
+            data: {
+                title: "Service Request Cancelled",
+                body: "The request was cancelled because it had not been accepted yet",
+                serviceId: request._id.toString(),
+                requestStatus: request.status,
+                type: "SERVICE_REQUEST"
+            }
+        });
 
 
         // Format response for Android
@@ -1189,12 +1643,16 @@ router.post("/confirmServiceCompletion", async (req, res) => {
 
             if (mechanic?.fcmToken) {
                 await admin.messaging().send({
+                    title: "Service Completed ✅",
+                    body: "Customer confirmed the service completion",
                     token: mechanic.fcmToken,
                     notification: {
                         title: "Service Completed ✅",
                         body: "Customer confirmed the service completion"
                     },
                     data: {
+                        title: "Service Completed ✅",
+                        body: "Customer confirmed the service completion",
                         serviceId: request._id.toString(),
                         requestStatus: request.status,
                         type: "SERVICE_COMPLETED"

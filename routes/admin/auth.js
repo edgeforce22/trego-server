@@ -1,9 +1,9 @@
 // javascript
-// ================================
-// ADMIN DASHBOARD GET APIs
+// =============================================
+// UPDATED ADMIN DASHBOARD GET APIs
 // File: routes/admin/dashboard.js
-// Base Route: /api/admin/dashboard
-// ================================
+// Auto Populate all MongoDB ObjectIds
+// =============================================
 
 const express = require("express");
 const router = express.Router();
@@ -15,17 +15,28 @@ const Shop = require("../../models/Shop");
 const Services = require("../../models/Services");
 const ServiceRequest = require("../../models/ServiceRequest");
 
-// =====================================================
-// 1. DASHBOARD OVERVIEW
+// =============================================
+// COMMON POPULATE CONFIG
+// =============================================
+
+const requestPopulate = [
+    { path: "customerId", model: "Customer" },
+    { path: "shopId", model: "Shop", populate: { path: "ownerId", model: "Mechanic" } },
+    { path: "mechanicId", model: "Mechanic" },
+    { path: "vehicleId", model: "Vehicle" },
+    { path: "serviceId", model: "Services" }
+];
+
+// =============================================
+// 1. OVERVIEW
 // GET /api/admin/dashboard/overview
-// =====================================================
+// =============================================
 router.get("/overview", async (req, res) => {
     try {
         const totalCustomers = await Customer.countDocuments();
         const totalMechanics = await Mechanic.countDocuments();
         const activeMechanics = await Mechanic.countDocuments({ status: "active" });
         const inactiveMechanics = await Mechanic.countDocuments({ status: "inactive" });
-
         const totalShops = await Shop.countDocuments();
 
         const activeRequests = await ServiceRequest.countDocuments({
@@ -46,10 +57,15 @@ router.get("/overview", async (req, res) => {
 
         const revenue = await ServiceRequest.aggregate([
             { $match: { status: "completed" } },
-            { $group: { _id: null, total: { $sum: "$totalPrice" } } }
+            {
+                $group: {
+                    _id: null,
+                    totalRevenue: { $sum: "$totalPrice" }
+                }
+            }
         ]);
 
-        res.json({
+        return res.status(200).json({
             success: true,
             data: {
                 totalCustomers,
@@ -61,162 +77,173 @@ router.get("/overview", async (req, res) => {
                 completedRequests,
                 cancelledRequests,
                 sosRequests,
-                totalRevenue: revenue[0]?.total || 0
+                totalRevenue: revenue[0]?.totalRevenue || 0
             }
         });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
-// 2. GET ALL CUSTOMERS
+// =============================================
+// 2. CUSTOMERS
 // GET /api/admin/dashboard/customers
-// =====================================================
+// =============================================
 router.get("/customers", async (req, res) => {
     try {
         const customers = await Customer.find().sort({ createdAt: -1 });
 
         const data = await Promise.all(
             customers.map(async (customer) => {
-                const vehicleCount = await Vehicle.countDocuments({
+
+                const vehicles = await Vehicle.find({
                     customerId: customer._id
                 });
 
-                const requestCount = await ServiceRequest.countDocuments({
+                const requests = await ServiceRequest.find({
                     customerId: customer._id
-                });
+                }).populate(requestPopulate);
 
                 return {
-                    ...customer._doc,
-                    vehicleCount,
-                    requestCount
+                    ...customer.toObject(),
+                    vehicles,
+                    requests,
+                    vehicleCount: vehicles.length,
+                    requestCount: requests.length
                 };
             })
         );
 
         res.json({ success: true, data });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
+// =============================================
 // 3. CUSTOMER VEHICLES
 // GET /api/admin/dashboard/customer-vehicles
-// =====================================================
+// =============================================
 router.get("/customer-vehicles", async (req, res) => {
     try {
-        const data = await Vehicle.aggregate([
-            {
-                $lookup: {
-                    from: "customers",
-                    localField: "customerId",
-                    foreignField: "_id",
-                    as: "customer"
-                }
-            },
-            { $unwind: "$customer" }
-        ]);
+        const data = await Vehicle.find()
+            .populate("customerId")
+            .sort({ _id: -1 });
 
         res.json({ success: true, data });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
+// =============================================
 // 4. CUSTOMER REQUESTS
-// GET /api/admin/dashboard/customer-requests
-// =====================================================
+// =============================================
 router.get("/customer-requests", async (req, res) => {
     try {
         const data = await ServiceRequest.find()
-            .populate("customerId")
-            .populate("shopId")
-            .populate("mechanicId")
-            .populate("vehicleId")
-            .populate("serviceId")
+            .populate(requestPopulate)
             .sort({ createdAt: -1 });
 
         res.json({ success: true, data });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
-// 5. GET ALL MECHANICS
-// GET /api/admin/dashboard/mechanics
-// =====================================================
+// =============================================
+// 5. MECHANICS
+// =============================================
 router.get("/mechanics", async (req, res) => {
     try {
-        const mechanics = await Mechanic.find().sort({ createdAt: -1 });
+
+        const mechanics = await Mechanic.find()
+            .populate("shopId")
+            .sort({ createdAt: -1 });
 
         const data = await Promise.all(
             mechanics.map(async (mech) => {
+
                 const completedJobs = await ServiceRequest.countDocuments({
                     mechanicId: mech._id,
                     status: "completed"
                 });
 
+                const activeJobs = await ServiceRequest.countDocuments({
+                    mechanicId: mech._id,
+                    status: { $in: ["accepted", "in_progress"] }
+                });
+
                 return {
-                    ...mech._doc,
-                    completedJobs
+                    ...mech.toObject(),
+                    completedJobs,
+                    activeJobs
                 };
             })
         );
 
         res.json({ success: true, data });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
-// 6. SHOPS DATA
-// GET /api/admin/dashboard/shops
-// =====================================================
+// =============================================
+// 6. SHOPS
+// =============================================
 router.get("/shops", async (req, res) => {
     try {
         const data = await Shop.find()
             .populate("ownerId")
+            .populate("workers")
             .sort({ createdAt: -1 });
 
         res.json({ success: true, data });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
-// 7. SERVICES DATA
-// GET /api/admin/dashboard/services
-// =====================================================
+// =============================================
+// 7. SERVICES
+// =============================================
 router.get("/services", async (req, res) => {
     try {
         const data = await Services.find()
-            .populate("shopId")
-            .sort({ createdAt: -1 });
+            .populate({
+                path: "shopId",
+                populate: {
+                    path: "ownerId",
+                    model: "Mechanic"
+                }
+            });
 
         res.json({ success: true, data });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
-// 8. WORKERS DATA
-// GET /api/admin/dashboard/workers
-// =====================================================
+// =============================================
+// 8. WORKERS
+// =============================================
 router.get("/workers", async (req, res) => {
     try {
+
         const workers = await Mechanic.find({
-            role: { $ne: "owner" }
-        });
+            role: "worker"
+        }).populate("shopId");
 
         const data = await Promise.all(
             workers.map(async (worker) => {
+
                 const assignedJobs = await ServiceRequest.countDocuments({
                     mechanicId: worker._id
                 });
@@ -229,10 +256,10 @@ router.get("/workers", async (req, res) => {
                 const activeJob = await ServiceRequest.findOne({
                     mechanicId: worker._id,
                     status: { $in: ["accepted", "in_progress"] }
-                });
+                }).populate(requestPopulate);
 
                 return {
-                    ...worker._doc,
+                    ...worker.toObject(),
                     assignedJobs,
                     completedJobs,
                     activeJob
@@ -241,45 +268,46 @@ router.get("/workers", async (req, res) => {
         );
 
         res.json({ success: true, data });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
-// 9. REQUEST MONITORING
-// GET /api/admin/dashboard/requests
-// =====================================================
+// =============================================
+// 9. ALL REQUESTS
+// =============================================
 router.get("/requests", async (req, res) => {
     try {
         const data = await ServiceRequest.find()
-            .populate("customerId")
-            .populate("mechanicId")
-            .populate("shopId")
+            .populate(requestPopulate)
             .sort({ createdAt: -1 });
 
         res.json({ success: true, data });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// =====================================================
+// =============================================
 // 10. ANALYTICS
-// GET /api/admin/dashboard/analytics
-// =====================================================
+// =============================================
 router.get("/analytics", async (req, res) => {
     try {
+
         const requestTrend = await ServiceRequest.aggregate([
             {
                 $group: {
                     _id: {
-                        day: { $dayOfMonth: "$createdAt" },
-                        month: { $month: "$createdAt" }
+                        year: { $year: "$createdAt" },
+                        month: { $month: "$createdAt" },
+                        day: { $dayOfMonth: "$createdAt" }
                     },
                     total: { $sum: 1 }
                 }
-            }
+            },
+            { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } }
         ]);
 
         const topShops = await ServiceRequest.aggregate([
@@ -287,13 +315,17 @@ router.get("/analytics", async (req, res) => {
             {
                 $group: {
                     _id: "$shopId",
-                    totalJobs: { $sum: 1 },
+                    jobs: { $sum: 1 },
                     revenue: { $sum: "$totalPrice" }
                 }
             },
             { $sort: { revenue: -1 } },
             { $limit: 5 }
         ]);
+
+        await Shop.populate(topShops, {
+            path: "_id"
+        });
 
         res.json({
             success: true,
@@ -302,6 +334,7 @@ router.get("/analytics", async (req, res) => {
                 topShops
             }
         });
+
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }

@@ -114,7 +114,13 @@ const serviceRequestSchema = new mongoose.Schema(
         isSOS: {
             type: Boolean,
             default: false
-        }
+        },
+        sentShopIds: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "Shop"
+            }
+        ]
     },
     {
         timestamps: true
