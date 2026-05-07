@@ -7,6 +7,10 @@ const shopSchema = new mongoose.Schema(
             ref: "Mechanic",
             required: true
         },
+        shopImage: {
+            type: String,
+            default: ""
+        },
         shopName: {
             type: String,
             required: true
@@ -23,6 +27,16 @@ const shopSchema = new mongoose.Schema(
             default: "inactive",
         },
         rating: {
+            type: Number,
+            default: 0
+        },
+
+        ratingCount: {
+            type: Number,
+            default: 0
+        },
+
+        ratingSum: {
             type: Number,
             default: 0
         },
@@ -55,6 +69,11 @@ const shopSchema = new mongoose.Schema(
             type: String,
             required: true
         },
+        supportedVehicles: [
+            {
+                type: String
+            }
+        ],
         fcmToken: {
             type: String,
             default: null
@@ -64,7 +83,7 @@ const shopSchema = new mongoose.Schema(
                 type: mongoose.Schema.Types.ObjectId,
                 ref: "Mechanic"
             }
-        ]
+        ],
     },
     {
         timestamps: true

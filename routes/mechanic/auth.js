@@ -8,6 +8,7 @@ const Services = require("../../models/Services");
 const ServiceRequest = require("../../models/ServiceRequest");
 const Customer = require("../../models/Customer");
 const admin = require("../../utils/firebase/firebase");
+const { emitRemoveRequest, emitOrderStatusUpdate, emitSOSAccepted } = require("../../utils/socket/socket");
 
 // ================= REGISTER =================
 router.post("/register", async (req, res) => {
@@ -139,88 +140,552 @@ router.post("/login", async (req, res) => {
 });
 
 
-// ==================== Register Shop ==========================
-router.post("/registerShop", async (req, res) => {
-    console.log("-----API Create Shop-----");
+const upload =
+    require("../../middleware/upload");
 
-    try {
-        const {
-            ownerId,
-            shopName,
-            phoneNumber,
-            address,
-            latitude,
-            longitude,
-            openingTime,
-            closingTime
-        } = req.body;
+router.post(
 
-        // Validate required fields
-        if (!ownerId || !shopName || !phoneNumber || !address || latitude === undefined || longitude === undefined) {
-            console.log("Missing fields occur", req.body);
-            return res.status(400).json(
-                ApiResponse.error("Missing required fields", 400)
-            );
-        }
+    "/registerShop",
 
-        // Check if shop already exists
-        const existingShop = await Shop.findOne({ ownerId });
+    upload.single("shopImage"),
 
-        if (existingShop) {
-            return res.status(400).json(
-                ApiResponse.error("Owner already has a shop registered", 400)
-            );
-        }
+    async (req, res) => {
 
-        // Create shop
-        const shop = new Shop({
-            ownerId,
-            shopName,
-            phoneNumber,
-            address,
-            location: {
-                type: "Point",
-                coordinates: [longitude, latitude]
-            },
-            openingTime,
-            closingTime
-        });
-
-        await shop.save();
-
-        // Update mechanic with shopId and return updated mechanic
-        const updatedMechanic = await Mechanic.findByIdAndUpdate(
-            ownerId,
-            { shopId: shop._id },
-            { returnDocument: "after" }
+        console.log(
+            "-----API Create Shop-----"
         );
 
-        console.log("Shop created successfully", shop);
-        console.log("Updated Mechanic", updatedMechanic);
+        try {
 
-        return res.status(201).json(
-            ApiResponse.success("Shop created successfully", {
-                shop,
-                mechanic: {
-                    _id: updatedMechanic._id,
-                    shopId: updatedMechanic.shopId,
-                    name: updatedMechanic.name,
-                    phoneNumber: updatedMechanic.phoneNumber,
-                    role: updatedMechanic.role,
-                    address: updatedMechanic.address,
-                    status: updatedMechanic.status
+            /*
+             * GET BODY DATA
+             */
+            const {
+
+                ownerId,
+                shopName,
+                phoneNumber,
+                address,
+                latitude,
+                longitude,
+                openingTime,
+                closingTime,
+                supportedVehicles
+
+            } = req.body;
+
+            /*
+             * VALIDATION
+             */
+            if (
+                !ownerId ||
+                !shopName ||
+                !phoneNumber ||
+                !address ||
+                latitude === undefined ||
+                longitude === undefined
+            ) {
+
+                console.log(
+                    "Missing fields occur",
+                    req.body
+                );
+
+                return res.status(400).json(
+
+                    ApiResponse.error(
+                        "Missing required fields",
+                        400
+                    )
+                );
+            }
+
+            /*
+             * PARSE VEHICLES
+             */
+            let parsedVehicles = [];
+
+            if (supportedVehicles) {
+
+                try {
+
+                    parsedVehicles =
+                        JSON.parse(
+                            supportedVehicles
+                        );
+
+                } catch (e) {
+
+                    parsedVehicles = [];
                 }
-            })
-        );
+            }
 
-    } catch (err) {
-        console.error(err);
-        return res.status(500).json(
-            ApiResponse.error("Server error", 500)
-        );
+            /*
+             * CHECK SHOP EXISTS
+             */
+            const existingShop =
+                await Shop.findOne({
+                    ownerId
+                });
+
+            if (existingShop) {
+
+                return res.status(400).json(
+
+                    ApiResponse.error(
+                        "Owner already has a shop registered",
+                        400
+                    )
+                );
+            }
+
+            /*
+             * GET SHOP IMAGE
+             */
+            let shopImage = "";
+
+            if (
+                req.file &&
+                req.file.path
+            ) {
+
+                shopImage =
+                    req.file.path;
+            }
+
+            /*
+             * CREATE SHOP
+             */
+            const shop = new Shop({
+
+                ownerId,
+
+                shopName,
+
+                phoneNumber,
+
+                address,
+
+                /*
+                 * SHOP IMAGE
+                 */
+                shopImage,
+
+                /*
+                 * LOCATION
+                 */
+                location: {
+
+                    type: "Point",
+
+                    coordinates: [
+
+                        parseFloat(longitude),
+
+                        parseFloat(latitude)
+                    ]
+                },
+
+                openingTime,
+
+                closingTime,
+
+                /*
+                 * VEHICLES
+                 */
+                supportedVehicles:
+                    parsedVehicles
+            });
+
+            /*
+             * SAVE SHOP
+             */
+            await shop.save();
+
+            console.log(
+                "Shop created successfully",
+                shop
+            );
+
+            /*
+             * UPDATE MECHANIC
+             */
+            const updatedMechanic =
+                await Mechanic.findByIdAndUpdate(
+
+                    ownerId,
+
+                    {
+                        shopId: shop._id
+                    },
+
+                    {
+                        new: true
+                    }
+                );
+
+            console.log(
+                "Updated Mechanic",
+                updatedMechanic
+            );
+
+            /*
+             * SUCCESS RESPONSE
+             */
+            return res.status(201).json(
+
+                ApiResponse.success(
+
+                    "Shop created successfully",
+
+                    {
+
+                        /*
+                         * SHOP DATA
+                         */
+                        shop: {
+
+                            _id:
+                                shop._id,
+
+                            ownerId:
+                                shop.ownerId,
+
+                            shopName:
+                                shop.shopName,
+
+                            phoneNumber:
+                                shop.phoneNumber,
+
+                            address:
+                                shop.address,
+
+                            shopImage:
+                                shop.shopImage,
+
+                            latitude:
+                                shop.location
+                                    .coordinates[1],
+
+                            longitude:
+                                shop.location
+                                    .coordinates[0],
+
+                            openingTime:
+                                shop.openingTime,
+
+                            closingTime:
+                                shop.closingTime,
+
+                            supportedVehicles:
+                                shop.supportedVehicles,
+
+                            workers:
+                                shop.workers,
+
+                            createdAt:
+                                shop.createdAt,
+
+                            updatedAt:
+                                shop.updatedAt
+                        },
+
+                        /*
+                         * MECHANIC DATA
+                         */
+                        mechanic: {
+
+                            _id:
+                                updatedMechanic._id,
+
+                            shopId:
+                                updatedMechanic.shopId,
+
+                            name:
+                                updatedMechanic.name,
+
+                            phoneNumber:
+                                updatedMechanic.phoneNumber,
+
+                            role:
+                                updatedMechanic.role,
+
+                            address:
+                                updatedMechanic.address,
+
+                            status:
+                                updatedMechanic.status,
+
+                            profileImage:
+                                updatedMechanic.profileImage
+                        }
+                    }
+                )
+            );
+
+            console.log("Shop created successfully",
+
+                {
+
+                    /*
+                     * SHOP DATA
+                     */
+                    shop: {
+
+                        _id:
+                            shop._id,
+
+                        ownerId:
+                            shop.ownerId,
+
+                        shopName:
+                            shop.shopName,
+
+                        phoneNumber:
+                            shop.phoneNumber,
+
+                        address:
+                            shop.address,
+
+                        shopImage:
+                            shop.shopImage,
+
+                        latitude:
+                            shop.location
+                                .coordinates[1],
+
+                        longitude:
+                            shop.location
+                                .coordinates[0],
+
+                        openingTime:
+                            shop.openingTime,
+
+                        closingTime:
+                            shop.closingTime,
+
+                        supportedVehicles:
+                            shop.supportedVehicles,
+
+                        workers:
+                            shop.workers,
+
+                        createdAt:
+                            shop.createdAt,
+
+                        updatedAt:
+                            shop.updatedAt
+                    },
+
+                    /*
+                     * MECHANIC DATA
+                     */
+                    mechanic: {
+
+                        _id:
+                            updatedMechanic._id,
+
+                        shopId:
+                            updatedMechanic.shopId,
+
+                        name:
+                            updatedMechanic.name,
+
+                        phoneNumber:
+                            updatedMechanic.phoneNumber,
+
+                        role:
+                            updatedMechanic.role,
+
+                        address:
+                            updatedMechanic.address,
+
+                        status:
+                            updatedMechanic.status,
+
+                        profileImage:
+                            updatedMechanic.profileImage
+                    }
+                })
+
+        } catch (err) {
+
+            console.error(
+                "REGISTER SHOP ERROR"
+            );
+
+            console.error(err);
+
+            return res.status(500).json(
+
+                ApiResponse.error(
+
+                    err.message ||
+                    "Server error",
+
+                    500
+                )
+            );
+        }
     }
-});
+);
 
+
+// // ==================== Register Shop ==========================
+// router.post("/registerShop", async (req, res) => {
+
+//     console.log("-----API Create Shop-----");
+
+//     try {
+
+//         const {
+//             ownerId,
+//             shopName,
+//             phoneNumber,
+//             address,
+//             latitude,
+//             longitude,
+//             openingTime,
+//             closingTime,
+//             supportedVehicles
+//         } = req.body;
+
+//         /*
+//          * VALIDATION
+//          */
+//         if (
+//             !ownerId ||
+//             !shopName ||
+//             !phoneNumber ||
+//             !address ||
+//             latitude === undefined ||
+//             longitude === undefined ||
+//             !supportedVehicles ||
+//             supportedVehicles.length === 0
+//         ) {
+
+//             console.log(
+//                 "Missing fields occur",
+//                 req.body
+//             );
+
+//             return res.status(400).json(
+//                 ApiResponse.error(
+//                     "Missing required fields",
+//                     400
+//                 )
+//             );
+//         }
+
+//         /*
+//          * CHECK SHOP EXISTS
+//          */
+//         const existingShop =
+//             await Shop.findOne({ ownerId });
+
+//         if (existingShop) {
+
+//             return res.status(400).json(
+//                 ApiResponse.error(
+//                     "Owner already has a shop registered",
+//                     400
+//                 )
+//             );
+//         }
+
+//         /*
+//          * CREATE SHOP
+//          */
+//         const shop = new Shop({
+
+//             ownerId,
+//             shopName,
+//             phoneNumber,
+//             address,
+
+//             location: {
+//                 type: "Point",
+//                 coordinates: [
+//                     longitude,
+//                     latitude
+//                 ]
+//             },
+
+//             openingTime,
+//             closingTime,
+
+//             supportedVehicles
+//         });
+
+//         await shop.save();
+
+//         /*
+//          * UPDATE MECHANIC
+//          */
+//         const updatedMechanic =
+//             await Mechanic.findByIdAndUpdate(
+
+//                 ownerId,
+
+//                 {
+//                     shopId: shop._id
+//                 },
+
+//                 {
+//                     new: true
+//                 }
+//             );
+
+//         console.log(
+//             "Shop created successfully",
+//             shop
+//         );
+
+//         console.log(
+//             "Updated Mechanic",
+//             updatedMechanic
+//         );
+
+//         /*
+//          * RESPONSE
+//          */
+//         return res.status(201).json(
+
+//             ApiResponse.success(
+//                 "Shop created successfully",
+
+//                 {
+//                     shop,
+
+//                     mechanic: {
+
+//                         _id: updatedMechanic._id,
+//                         shopId: updatedMechanic.shopId,
+//                         name: updatedMechanic.name,
+//                         phoneNumber:
+//                             updatedMechanic.phoneNumber,
+//                         role: updatedMechanic.role,
+//                         address:
+//                             updatedMechanic.address,
+//                         status:
+//                             updatedMechanic.status
+//                     }
+//                 }
+//             )
+//         );
+
+//     } catch (err) {
+
+//         console.error(err);
+
+//         return res.status(500).json(
+//             ApiResponse.error(
+//                 "Server error",
+//                 500
+//             )
+//         );
+//     }
+// });
 
 // ==================== Get Shop Id ==========================
 router.post("/getShopId", async (req, res) => {
@@ -260,66 +725,295 @@ router.post("/getShopId", async (req, res) => {
 });
 
 
-// ==================== Create Service ==========================
+// ==================== CREATE SERVICES ====================
 router.post("/createService", async (req, res) => {
-    console.log("-----API Create Service-----");
+
+    console.log("-----API Create Services-----");
 
     try {
-        const { shopId, service, description, price } = req.body;
 
-        if (!shopId || !service || !description || price === undefined) {
+        const {
+            shopId,
+            services
+        } = req.body;
+
+        console.log(
+            "Received Request Body:",
+            JSON.stringify(req.body, null, 2)
+        );
+
+        /*
+         * VALIDATION
+         */
+        if (
+            !shopId ||
+            !services ||
+            !Array.isArray(services) ||
+            services.length === 0
+        ) {
+
+            console.log(
+                "Invalid Request Data"
+            );
+
             return res.status(400).json(
-                ApiResponse.error("ShopId, service name and price are required", 400)
+                ApiResponse.error(
+                    "ShopId and services are required",
+                    400
+                )
             );
         }
 
-        const parsedPrice = Number(price);
+        /*
+         * CHECK SHOP
+         */
+        const shopExists =
+            await Shop.findById(shopId);
 
-        if (isNaN(parsedPrice)) {
-            return res.status(400).json(
-                ApiResponse.error("Price must be a number", 400)
-            );
-        }
-
-        const shopExists = await Shop.findById(shopId);
         if (!shopExists) {
+
+            console.log(
+                "Shop not found:",
+                shopId
+            );
+
             return res.status(404).json(
-                ApiResponse.error("Shop not found", 404)
+                ApiResponse.error(
+                    "Shop not found",
+                    404
+                )
             );
         }
 
-        const existingService = await Services.findOne({
-            shopId,
-            service
-        });
+        /*
+         * CREATED SERVICES
+         */
+        const createdServices = [];
 
-        if (existingService) {
+        /*
+         * LOOP SERVICES
+         */
+        for (const item of services) {
+
+            console.log(
+                "Processing Service Item:",
+                item
+            );
+
+            /*
+             * IMPORTANT:
+             * CHECK FIELD NAMES
+             */
+            const service =
+                item.service ||
+                item.serviceName;
+
+            const description =
+                item.description;
+
+            const price =
+                item.price;
+
+            console.log(
+                "Parsed Values:",
+                {
+                    service,
+                    description,
+                    price
+                }
+            );
+
+            /*
+             * VALIDATE SERVICE
+             */
+            if (
+                !service ||
+                !description ||
+                price === undefined
+            ) {
+
+                console.log(
+                    "Skipping Invalid Item:",
+                    item
+                );
+
+                continue;
+            }
+
+            /*
+             * PARSE PRICE
+             */
+            const parsedPrice =
+                Number(price);
+
+            if (isNaN(parsedPrice)) {
+
+                console.log(
+                    "Invalid Price:",
+                    price
+                );
+
+                continue;
+            }
+
+            /*
+             * CHECK DUPLICATE
+             */
+            const existingService =
+                await Services.findOne({
+
+                    shopId,
+                    service
+                });
+
+            if (existingService) {
+
+                console.log(
+                    "Duplicate Service Found:",
+                    service
+                );
+
+                continue;
+            }
+
+            /*
+             * CREATE SERVICE
+             */
+            const newService =
+                new Services({
+
+                    shopId,
+                    service,
+                    description,
+                    price: parsedPrice
+                });
+
+            /*
+             * SAVE
+             */
+            const savedService =
+                await newService.save();
+
+            console.log(
+                "Saved Service:",
+                savedService
+            );
+
+            createdServices.push(
+                savedService
+            );
+        }
+
+        /*
+         * NO SERVICES CREATED
+         */
+        if (createdServices.length === 0) {
+
+            console.log(
+                "No services inserted"
+            );
+
             return res.status(400).json(
-                ApiResponse.error("Service already exists for this shop", 400)
+                ApiResponse.error(
+                    "No valid services to create",
+                    400
+                )
             );
         }
 
-        const newService = new Services({
-            shopId,
-            service,
-            description,
-            price: parsedPrice
-        });
+        /*
+         * SUCCESS RESPONSE
+         */
+        console.log(
+            "Services Created Successfully:",
+            createdServices
+        );
 
-        await newService.save();
-
-        console.log("Service created successfully", newService);
         return res.status(201).json(
-            ApiResponse.success("Service created successfully", newService)
+
+            ApiResponse.success(
+                "Services created successfully",
+                createdServices
+            )
         );
 
     } catch (err) {
-        console.error(err);
+
+        console.error(
+            "CREATE SERVICE ERROR:",
+            err
+        );
+
         return res.status(500).json(
-            ApiResponse.error("Server error", 500)
+
+            ApiResponse.error(
+                "Server error",
+                500
+            )
         );
     }
 });
+
+// // ==================== Create Service ==========================
+// router.post("/createService", async (req, res) => {
+//     console.log("-----API Create Service-----");
+
+//     try {
+//         const { shopId, service, description, price } = req.body;
+
+//         if (!shopId || !service || !description || price === undefined) {
+//             return res.status(400).json(
+//                 ApiResponse.error("ShopId, service name and price are required", 400)
+//             );
+//         }
+
+//         const parsedPrice = Number(price);
+
+//         if (isNaN(parsedPrice)) {
+//             return res.status(400).json(
+//                 ApiResponse.error("Price must be a number", 400)
+//             );
+//         }
+
+//         const shopExists = await Shop.findById(shopId);
+//         if (!shopExists) {
+//             return res.status(404).json(
+//                 ApiResponse.error("Shop not found", 404)
+//             );
+//         }
+
+//         const existingService = await Services.findOne({
+//             shopId,
+//             service
+//         });
+
+//         if (existingService) {
+//             return res.status(400).json(
+//                 ApiResponse.error("Service already exists for this shop", 400)
+//             );
+//         }
+
+//         const newService = new Services({
+//             shopId,
+//             service,
+//             description,
+//             price: parsedPrice
+//         });
+
+//         await newService.save();
+
+//         console.log("Service created successfully", newService);
+//         return res.status(201).json(
+//             ApiResponse.success("Service created successfully", newService)
+//         );
+
+//     } catch (err) {
+//         console.error(err);
+//         return res.status(500).json(
+//             ApiResponse.error("Server error", 500)
+//         );
+//     }
+// });
 
 
 // ==================== Get Shop Services By ShopId ==========================
@@ -915,7 +1609,7 @@ router.post("/getShopServiceRequests", async (req, res) => {
 
         const response = await Promise.all(
             requests.map(async (request) => {
-                const shop = await Shop.findById(request.shopId).select("shopName");
+                const shop = await Shop.findById(request.shopId).select("shopName supportedVehicles");
                 const service = await Services.findById(request.serviceId).select("service");
                 const customer = await Customer.findById(request.customerId).select("name");
 
@@ -935,6 +1629,7 @@ router.post("/getShopServiceRequests", async (req, res) => {
                     totalDistance: request.totalDistance,
                     totalDuration: request.totalDuration,
                     paymentStatus: request.paymentStatus,
+                    requestImages: request.requestImages,
 
                     customerLocation: request.customerLocation?.location?.coordinates
                         ? {
@@ -969,281 +1664,1505 @@ router.post("/getShopServiceRequests", async (req, res) => {
 });
 
 
+
 // ================= Get Accepted Service Request =================
 router.post("/getAcceptedServiceRequest", async (req, res) => {
-    console.log("-----API Get Service Request By ID-----");
+
+    console.log("-----API Get Accepted Service Request-----");
 
     try {
+
         const { id } = req.body;
 
+        /*
+         * VALIDATION
+         */
         if (!id) {
-            console.log("Request Id are required", req.body);
+
+            console.log(
+                "Request Id is required",
+                req.body
+            );
+
             return res.status(400).json(
-                ApiResponse.error("Request ID is required", 400)
+
+                ApiResponse.error(
+                    "Request ID is required",
+                    400
+                )
             );
         }
 
-        const request = await ServiceRequest.findById(id);
+        /*
+         * FIND REQUEST
+         */
+        const request =
+            await ServiceRequest.findById(id);
 
         if (!request) {
-            console.log("Service request not found", req.body);
+
+            console.log(
+                "Service request not found",
+                req.body
+            );
+
             return res.status(404).json(
-                ApiResponse.error("Service request not found", 404)
+
+                ApiResponse.error(
+                    "Service request not found",
+                    404
+                )
             );
         }
 
-        const shop = await Shop.findById(request.shopId).select("shopName");
-        const service = await Services.findById(request.serviceId).select("service");
-        const customer = await Customer.findById(request.customerId).select("name");
+        /*
+         * GET RELATED DATA
+         */
+        const shop =
+            await Shop.findById(
+                request.shopId
+            ).select(
+                "shopName supportedVehicles"
+            );
 
+        const service =
+            await Services.findById(
+                request.serviceId
+            ).select(
+                "service description price"
+            );
+
+        const customer =
+            await Customer.findById(
+                request.customerId
+            ).select(
+                "name phoneNumber"
+            );
+
+        const mechanic =
+            await Mechanic.findById(
+                request.mechanicId
+            ).select(
+                "name phoneNumber"
+            );
+
+        /*
+         * RESPONSE
+         */
         const response = {
-            _id: request._id,
-            customerId: request.customerId,
-            customerName: customer ? customer.name : "",
-            shopId: request.shopId,
-            shopName: shop ? shop.shopName : "",
-            mechanicId: request.mechanicId,
-            vehicleId: request.vehicleId,
-            serviceId: request.serviceId,
-            serviceName: service ? service.service : "",
-            problemDescription: request.problemDescription,
-            status: request.status,
-            totalPrice: request.totalPrice,
-            totalDistance: request.totalDistance,
-            totalDuration: request.totalDuration,
-            paymentStatus: request.paymentStatus,
 
-            customerLocation: request.customerLocation
-                ? {
-                    latitude: request.customerLocation.location.coordinates[1],
-                    longitude: request.customerLocation.location.coordinates[0],
-                    address: request.customerLocation.address
-                }
-                : null,
+            _id:
+                request._id,
 
-            mechanicLocation: request.mechanicLocation?.location?.coordinates
-                ? {
-                    latitude: request.mechanicLocation.location.coordinates[1],
-                    longitude: request.mechanicLocation.location.coordinates[0],
-                    address: request.mechanicLocation.address
-                }
-                : null,
+            customerId:
+                request.customerId,
 
-            createdAt: request.createdAt
+            customerName:
+                customer
+                    ? customer.name
+                    : "",
+
+            customerPhoneNumber:
+                customer
+                    ? customer.phoneNumber
+                    : "",
+
+            shopId:
+                request.shopId,
+
+            shopName:
+                shop
+                    ? shop.shopName
+                    : "",
+
+            mechanicId:
+                request.mechanicId,
+
+            mechanicName:
+                mechanic
+                    ? mechanic.name
+                    : "",
+
+            mechanicPhoneNumber:
+                mechanic
+                    ? mechanic.phoneNumber
+                    : "",
+
+            vehicleId:
+                request.vehicleId,
+
+            serviceId:
+                request.serviceId,
+
+            /*
+             * SERVICE DETAILS
+             */
+            serviceName:
+                service
+                    ? service.service
+                    : "",
+
+            serviceDescription:
+                service
+                    ? (
+                        service.description ||
+                        ""
+                    )
+                    : "",
+
+            supportedVehicles:
+                shop?.supportedVehicles || [],
+
+            /*
+             * REQUEST DETAILS
+             */
+            problemDescription:
+                request.problemDescription,
+
+            status:
+                request.status,
+
+            totalPrice:
+                request.totalPrice,
+
+            totalDistance:
+                request.totalDistance,
+
+            totalDuration:
+                request.totalDuration,
+
+            paymentStatus:
+                request.paymentStatus,
+
+            isSOS: request.isSOS,
+
+            /*
+             * CUSTOMER LOCATION
+             */
+            customerLocation:
+                request.customerLocation
+                    ? {
+
+                        latitude:
+                            request.customerLocation
+                                .location
+                                .coordinates[1],
+
+                        longitude:
+                            request.customerLocation
+                                .location
+                                .coordinates[0],
+
+                        address:
+                            request.customerLocation
+                                .address
+                    }
+                    : null,
+
+            /*
+             * MECHANIC LOCATION
+             */
+            mechanicLocation:
+                request.mechanicLocation
+                    ?.location
+                    ?.coordinates
+
+                    ? {
+
+                        latitude:
+                            request.mechanicLocation
+                                .location
+                                .coordinates[1],
+
+                        longitude:
+                            request.mechanicLocation
+                                .location
+                                .coordinates[0],
+
+                        address:
+                            request.mechanicLocation
+                                .address
+                    }
+
+                    : null,
+
+            createdAt:
+                request.createdAt
         };
 
-        console.log("Service request fetched successfully", response);
+        console.log(
+            "Accepted service request fetched successfully",
+            response
+        );
+
         return res.status(200).json(
-            ApiResponse.success("Service request fetched successfully", response)
+
+            ApiResponse.success(
+                "Service request fetched successfully",
+                response
+            )
         );
 
     } catch (err) {
+
         console.error(err);
-        return res.status(500).json(ApiResponse.error("Server error", 500));
+
+        return res.status(500).json(
+
+            ApiResponse.error(
+                "Server error",
+                500
+            )
+        );
     }
 });
+
+
+// // ================= Get Accepted Service Request =================
+// router.post("/getAcceptedServiceRequest", async (req, res) => {
+//     console.log("-----API Get Service Request By ID-----");
+
+//     try {
+//         const { id } = req.body;
+
+//         if (!id) {
+//             console.log("Request Id are required", req.body);
+//             return res.status(400).json(
+//                 ApiResponse.error("Request ID is required", 400)
+//             );
+//         }
+
+//         const request = await ServiceRequest.findById(id);
+
+//         if (!request) {
+//             console.log("Service request not found", req.body);
+//             return res.status(404).json(
+//                 ApiResponse.error("Service request not found", 404)
+//             );
+//         }
+
+//         const shop = await Shop.findById(request.shopId).select("shopName supportedVehicles");
+//         const service = await Services.findById(request.serviceId).select("service");
+//         const customer = await Customer.findById(request.customerId).select("name");
+
+//         const response = {
+//             _id: request._id,
+//             customerId: request.customerId,
+//             customerName: customer ? customer.name : "",
+//             shopId: request.shopId,
+//             shopName: shop ? shop.shopName : "",
+//             mechanicId: request.mechanicId,
+//             vehicleId: request.vehicleId,
+//             serviceId: request.serviceId,
+//             serviceName: service ? service.service : "",
+//             problemDescription: request.problemDescription,
+//             status: request.status,
+//             totalPrice: request.totalPrice,
+//             totalDistance: request.totalDistance,
+//             totalDuration: request.totalDuration,
+//             paymentStatus: request.paymentStatus,
+
+//             customerLocation: request.customerLocation
+//                 ? {
+//                     latitude: request.customerLocation.location.coordinates[1],
+//                     longitude: request.customerLocation.location.coordinates[0],
+//                     address: request.customerLocation.address
+//                 }
+//                 : null,
+
+//             mechanicLocation: request.mechanicLocation?.location?.coordinates
+//                 ? {
+//                     latitude: request.mechanicLocation.location.coordinates[1],
+//                     longitude: request.mechanicLocation.location.coordinates[0],
+//                     address: request.mechanicLocation.address
+//                 }
+//                 : null,
+
+//             createdAt: request.createdAt
+//         };
+
+//         console.log("Service request fetched successfully", response);
+//         return res.status(200).json(
+//             ApiResponse.success("Service request fetched successfully", response)
+//         );
+
+//     } catch (err) {
+//         console.error(err);
+//         return res.status(500).json(ApiResponse.error("Server error", 500));
+//     }
+// });
+
 
 
 // ================= Get Active Service Requests =================
 router.post("/getActiveServiceRequests", async (req, res) => {
-    console.log("-----API Get Active Service Requests By ShopId & MechanicId-----");
+
+    console.log(
+        "-----API Get Active Service Requests By ShopId & MechanicId-----"
+    );
 
     try {
-        const { mechanicId, shopId } = req.body;
 
+        const {
+            mechanicId,
+            shopId
+        } = req.body;
+
+        /*
+         * VALIDATION
+         */
         if (!shopId || !mechanicId) {
-            console.log("shopId and mechanicId are required", req.body);
+
+            console.log(
+                "shopId and mechanicId are required",
+                req.body
+            );
+
             return res.status(400).json(
-                ApiResponse.error("Shop ID and Mechanic ID are required", 400)
+
+                ApiResponse.error(
+                    "Shop ID and Mechanic ID are required",
+                    400
+                )
             );
         }
 
-        const requests = await ServiceRequest.find({
-            mechanicId: mechanicId,
-            isActive: true,
-            $or: [{ shopId: shopId }, { isSOS: true }]
-        }).sort({ createdAt: -1 });
+        /*
+         * FETCH ACTIVE REQUESTS
+         */
+        const requests =
+            await ServiceRequest.find({
 
-        if (!requests.length) {
-            console.log("No active service requests found", req.body);
-            return res.status(200).json(
-                ApiResponse.success("No active service requests found", [])
-            );
-        }
+                mechanicId: mechanicId,
 
-        const response = await Promise.all(
-            requests.map(async (request) => {
-                const shop = await Shop.findById(request.shopId).select("shopName");
-                const service = await Services.findById(request.serviceId).select("service");
-                const customer = await Customer.findById(request.customerId).select("name");
+                isActive: true,
 
-                return {
-                    _id: request._id,
-                    customerId: request.customerId,
-                    customerName: customer ? customer.name : "",
-                    shopId: request.shopId,
-                    shopName: shop ? shop.shopName : "",
-                    mechanicId: request.mechanicId,
-                    vehicleId: request.vehicleId,
-                    serviceId: request.serviceId,
-                    serviceName: service ? service.service : "",
-                    problemDescription: request.problemDescription,
-                    status: request.status,
-                    isActive: request.isActive,
-                    isSOS: request.isSOS,
-                    totalPrice: request.totalPrice,
-                    totalDistance: request.totalDistance,
-                    totalDuration: request.totalDuration,
-                    paymentStatus: request.paymentStatus,
+                $or: [
 
-                    customerLocation: request.customerLocation?.location?.coordinates
-                        ? {
-                            latitude: request.customerLocation.location.coordinates[1],
-                            longitude: request.customerLocation.location.coordinates[0],
-                            address: request.customerLocation.address
-                        }
-                        : null,
+                    { shopId: shopId },
 
-                    mechanicLocation: request.mechanicLocation?.location?.coordinates
-                        ? {
-                            latitude: request.mechanicLocation.location.coordinates[1],
-                            longitude: request.mechanicLocation.location.coordinates[0],
-                            address: request.mechanicLocation.address
-                        }
-                        : null,
-
-                    createdAt: request.createdAt
-                };
+                    { isSOS: true }
+                ]
             })
+
+                /*
+                 * SHOP DETAILS
+                 */
+                .populate({
+
+                    path: "shopId",
+
+                    select:
+                        "shopName supportedVehicles"
+                })
+
+                /*
+                 * SERVICE DETAILS
+                 */
+                .populate({
+
+                    path: "serviceId",
+
+                    select:
+                        "service description price"
+                })
+
+                /*
+                 * CUSTOMER DETAILS
+                 */
+                .populate({
+
+                    path: "customerId",
+
+                    select:
+                        "name profileImage phoneNumber"
+                })
+
+                /*
+                 * MECHANIC DETAILS
+                 */
+                .populate({
+
+                    path: "mechanicId",
+
+                    select:
+                        "name profileImage"
+                })
+
+                .sort({
+                    createdAt: -1
+                });
+
+        /*
+         * EMPTY RESPONSE
+         */
+        if (!requests.length) {
+
+            console.log(
+                "No active service requests found",
+                req.body
+            );
+
+            return res.status(200).json(
+
+                ApiResponse.success(
+
+                    "No active service requests found",
+
+                    []
+                )
+            );
+        }
+
+        /*
+         * FORMAT RESPONSE
+         */
+        const response =
+            requests.map(request => ({
+
+                _id:
+                    request._id,
+
+                /*
+                 * CUSTOMER
+                 */
+                customerId:
+                    request.customerId?._id || null,
+
+                customerName:
+                    request.customerId?.name || "",
+
+                customerProfile:
+                    request.customerId?.profileImage || "",
+
+                customerPhone:
+                    request.customerId?.phoneNumber || "",
+
+                /*
+                 * SHOP
+                 */
+                shopId:
+                    request.shopId?._id || null,
+
+                shopName:
+                    request.shopId?.shopName || "",
+
+                supportedVehicles:
+                    request.shopId?.supportedVehicles || [],
+
+                /*
+                 * MECHANIC
+                 */
+                mechanicId:
+                    request.mechanicId?._id || null,
+
+                mechanicName:
+                    request.mechanicId?.name || "",
+
+                mechanicProfile:
+                    request.mechanicId?.profileImage || "",
+
+                /*
+                 * VEHICLE
+                 */
+                vehicleId:
+                    request.vehicleId,
+
+                /*
+                 * SERVICE
+                 */
+                serviceId:
+                    request.serviceId?._id || null,
+
+                serviceName:
+                    request.serviceId?.service || "",
+
+                serviceDescription:
+                    request.serviceId?.description || "",
+
+                servicePrice:
+                    request.serviceId?.price || 0,
+
+                /*
+                 * REQUEST
+                 */
+                problemDescription:
+                    request.problemDescription,
+
+                status:
+                    request.status,
+
+                isActive:
+                    request.isActive,
+
+                isSOS:
+                    request.isSOS,
+
+                totalPrice:
+                    request.totalPrice,
+
+                totalDistance:
+                    request.totalDistance,
+
+                totalDuration:
+                    request.totalDuration,
+
+                paymentStatus:
+                    request.paymentStatus,
+
+                /*
+                 * REQUEST IMAGES
+                 */
+                requestImages:
+                    request.requestImages || [],
+
+                /*
+                 * CUSTOMER LOCATION
+                 */
+                customerLocation:
+
+                    request.customerLocation
+                        ?.location
+                        ?.coordinates
+
+                        ? {
+
+                            latitude:
+
+                                request
+                                    .customerLocation
+                                    .location
+                                    .coordinates[1],
+
+                            longitude:
+
+                                request
+                                    .customerLocation
+                                    .location
+                                    .coordinates[0],
+
+                            address:
+                                request
+                                    .customerLocation
+                                    .address
+                        }
+
+                        : null,
+
+                /*
+                 * MECHANIC LOCATION
+                 */
+                mechanicLocation:
+
+                    request.mechanicLocation
+                        ?.location
+                        ?.coordinates
+
+                        ? {
+
+                            latitude:
+
+                                request
+                                    .mechanicLocation
+                                    .location
+                                    .coordinates[1],
+
+                            longitude:
+
+                                request
+                                    .mechanicLocation
+                                    .location
+                                    .coordinates[0],
+
+                            address:
+                                request
+                                    .mechanicLocation
+                                    .address
+                        }
+
+                        : null,
+
+                createdAt:
+                    request.createdAt
+            }));
+
+        /*
+         * SUCCESS RESPONSE
+         */
+        console.log(
+            "Active service requests fetched successfully"
         );
 
-        console.log("Active service requests fetched successfully", response);
         return res.status(200).json(
-            ApiResponse.success("Active service requests fetched successfully", response)
+
+            ApiResponse.success(
+
+                "Active service requests fetched successfully",
+
+                response
+            )
         );
 
     } catch (err) {
+
+        console.error(
+            "GET ACTIVE REQUEST ERROR"
+        );
+
         console.error(err);
-        return res.status(500).json(ApiResponse.error("Server error", 500));
+
+        return res.status(500).json(
+
+            ApiResponse.error(
+                "Server error",
+                500
+            )
+        );
     }
 });
+
+
+// // ================= Get Active Service Requests =================
+// router.post("/getActiveServiceRequests", async (req, res) => {
+//     console.log("-----API Get Active Service Requests By ShopId & MechanicId-----");
+
+//     try {
+//         const { mechanicId, shopId } = req.body;
+
+//         if (!shopId || !mechanicId) {
+//             console.log("shopId and mechanicId are required", req.body);
+//             return res.status(400).json(
+//                 ApiResponse.error("Shop ID and Mechanic ID are required", 400)
+//             );
+//         }
+
+//         const requests = await ServiceRequest.find({
+//             mechanicId: mechanicId,
+//             isActive: true,
+//             $or: [{ shopId: shopId }, { isSOS: true }]
+//         }).sort({ createdAt: -1 });
+
+//         if (!requests.length) {
+//             console.log("No active service requests found", req.body);
+//             return res.status(200).json(
+//                 ApiResponse.success("No active service requests found", [])
+//             );
+//         }
+
+//         const response = await Promise.all(
+//             requests.map(async (request) => {
+//                 const shop = await Shop.findById(request.shopId).select("shopName supportedVehicles");
+//                 const service = await Services.findById(request.serviceId).select("service");
+//                 const customer = await Customer.findById(request.customerId).select("name");
+
+//                 return {
+//                     _id: request._id,
+//                     customerId: request.customerId,
+//                     customerName: customer ? customer.name : "",
+//                     shopId: request.shopId,
+//                     shopName: shop ? shop.shopName : "",
+//                     mechanicId: request.mechanicId,
+//                     vehicleId: request.vehicleId,
+//                     serviceId: request.serviceId,
+//                     serviceName: service ? service.service : "",
+//                     problemDescription: request.problemDescription,
+//                     status: request.status,
+//                     isActive: request.isActive,
+//                     isSOS: request.isSOS,
+//                     totalPrice: request.totalPrice,
+//                     totalDistance: request.totalDistance,
+//                     totalDuration: request.totalDuration,
+//                     paymentStatus: request.paymentStatus,
+
+//                     customerLocation: request.customerLocation?.location?.coordinates
+//                         ? {
+//                             latitude: request.customerLocation.location.coordinates[1],
+//                             longitude: request.customerLocation.location.coordinates[0],
+//                             address: request.customerLocation.address
+//                         }
+//                         : null,
+
+//                     mechanicLocation: request.mechanicLocation?.location?.coordinates
+//                         ? {
+//                             latitude: request.mechanicLocation.location.coordinates[1],
+//                             longitude: request.mechanicLocation.location.coordinates[0],
+//                             address: request.mechanicLocation.address
+//                         }
+//                         : null,
+
+//                     createdAt: request.createdAt
+//                 };
+//             })
+//         );
+
+//         console.log("Active service requests fetched successfully", response);
+//         return res.status(200).json(
+//             ApiResponse.success("Active service requests fetched successfully", response)
+//         );
+
+//     } catch (err) {
+//         console.error(err);
+//         return res.status(500).json(ApiResponse.error("Server error", 500));
+//     }
+// });
+
 
 
 // ================= Get Shop History Service Requests =================
 router.post("/getShopHistoryServiceRequests", async (req, res) => {
-    console.log("-----API Get History Service Requests By ShopId-----");
+
+    console.log(
+        "-----API Get History Service Requests By ShopId-----"
+    );
 
     try {
+
         const { id } = req.body;
 
+        /*
+         * VALIDATION
+         */
         if (!id) {
-            console.log("shopId are required", req.body);
+
+            console.log(
+                "shopId are required",
+                req.body
+            );
+
             return res.status(400).json(
-                ApiResponse.error("Shop ID are required", 400)
+
+                ApiResponse.error(
+                    "Shop ID are required",
+                    400
+                )
             );
         }
 
-        const requests = await ServiceRequest.find({
-            shopId: id,
-            status: { $in: ["completed", "cancelled"] }
-        }).sort({ createdAt: -1 });
+        /*
+         * FETCH HISTORY REQUESTS
+         */
+        const requests =
+            await ServiceRequest.find({
 
-        const response = await Promise.all(
-            requests.map(async (request) => {
-                const shop = await Shop.findById(request.shopId).select("shopName");
-                const service = await Services.findById(request.serviceId).select("service");
-                const customer = await Customer.findById(request.customerId).select("name");
+                shopId: id,
 
-                return {
-                    _id: request._id,
-                    customerId: request.customerId,
-                    customerName: customer ? customer.name : "",
-                    shopId: request.shopId,
-                    shopName: shop ? shop.shopName : "",
-                    mechanicId: request.mechanicId,
-                    vehicleId: request.vehicleId,
-                    serviceId: request.serviceId,
-                    serviceName: service ? service.service : "",
-                    problemDescription: request.problemDescription,
-                    status: request.status,
-                    totalPrice: request.totalPrice,
-                    totalDistance: request.totalDistance,
-                    totalDuration: request.totalDuration,
-                    paymentStatus: request.paymentStatus,
-                    createdAt: request.createdAt
-                };
+                status: {
+                    $in: [
+
+                        "completed",
+
+                        "cancelled"
+                    ]
+                }
             })
+
+                /*
+                 * SHOP DETAILS
+                 */
+                .populate({
+
+                    path: "shopId",
+
+                    select:
+                        "shopName supportedVehicles"
+                })
+
+                /*
+                 * SERVICE DETAILS
+                 */
+                .populate({
+
+                    path: "serviceId",
+
+                    select:
+                        "service description price"
+                })
+
+                /*
+                 * CUSTOMER DETAILS
+                 */
+                .populate({
+
+                    path: "customerId",
+
+                    select:
+                        "name profileImage phoneNumber"
+                })
+
+                /*
+                 * MECHANIC DETAILS
+                 */
+                .populate({
+
+                    path: "mechanicId",
+
+                    select:
+                        "name profileImage"
+                })
+
+                .sort({
+                    createdAt: -1
+                });
+
+        /*
+         * EMPTY RESPONSE
+         */
+        if (!requests.length) {
+
+            return res.status(200).json(
+
+                ApiResponse.success(
+
+                    "No history service requests found",
+
+                    []
+                )
+            );
+        }
+
+        /*
+         * FORMAT RESPONSE
+         */
+        const response =
+            requests.map(request => ({
+
+                _id:
+                    request._id,
+
+                /*
+                 * CUSTOMER
+                 */
+                customerId:
+                    request.customerId?._id || null,
+
+                customerName:
+                    request.customerId?.name || "",
+
+                customerProfile:
+                    request.customerId?.profileImage || "",
+
+                customerPhone:
+                    request.customerId?.phoneNumber || "",
+
+                /*
+                 * SHOP
+                 */
+                shopId:
+                    request.shopId?._id || null,
+
+                shopName:
+                    request.shopId?.shopName || "",
+
+                supportedVehicles:
+                    request.shopId?.supportedVehicles || [],
+
+                /*
+                 * MECHANIC
+                 */
+                mechanicId:
+                    request.mechanicId?._id || null,
+
+                mechanicName:
+                    request.mechanicId?.name || "",
+
+                mechanicProfile:
+                    request.mechanicId?.profileImage || "",
+
+                /*
+                 * VEHICLE
+                 */
+                vehicleId:
+                    request.vehicleId,
+
+                /*
+                 * SERVICE
+                 */
+                serviceId:
+                    request.serviceId?._id || null,
+
+                serviceName:
+                    request.serviceId?.service || "",
+
+                serviceDescription:
+                    request.serviceId?.description || "",
+
+                servicePrice:
+                    request.serviceId?.price || 0,
+
+                /*
+                 * REQUEST
+                 */
+                problemDescription:
+                    request.problemDescription,
+
+                status:
+                    request.status,
+
+                totalPrice:
+                    request.totalPrice,
+
+                totalDistance:
+                    request.totalDistance,
+
+                totalDuration:
+                    request.totalDuration,
+
+                paymentStatus:
+                    request.paymentStatus,
+
+                /*
+                 * REQUEST IMAGES
+                 */
+                requestImages:
+                    request.requestImages || [],
+
+                /*
+                 * CUSTOMER LOCATION
+                 */
+                customerLocation:
+
+                    request.customerLocation
+                        ?.location
+                        ?.coordinates
+
+                        ? {
+
+                            latitude:
+
+                                request
+                                    .customerLocation
+                                    .location
+                                    .coordinates[1],
+
+                            longitude:
+
+                                request
+                                    .customerLocation
+                                    .location
+                                    .coordinates[0],
+
+                            address:
+                                request
+                                    .customerLocation
+                                    .address
+                        }
+
+                        : null,
+
+                /*
+                 * MECHANIC LOCATION
+                 */
+                mechanicLocation:
+
+                    request.mechanicLocation
+                        ?.location
+                        ?.coordinates
+
+                        ? {
+
+                            latitude:
+
+                                request
+                                    .mechanicLocation
+                                    .location
+                                    .coordinates[1],
+
+                            longitude:
+
+                                request
+                                    .mechanicLocation
+                                    .location
+                                    .coordinates[0],
+
+                            address:
+                                request
+                                    .mechanicLocation
+                                    .address
+                        }
+
+                        : null,
+
+                createdAt:
+                    request.createdAt
+            }));
+
+        /*
+         * SUCCESS RESPONSE
+         */
+        console.log(
+            "History service fetched successfully"
         );
 
-        console.log("History service fetched successfully", response);
         return res.status(200).json(
-            ApiResponse.success("History service requests fetched successfully", response)
+
+            ApiResponse.success(
+
+                "History service requests fetched successfully",
+
+                response
+            )
         );
 
     } catch (err) {
+
+        console.error(
+            "GET HISTORY REQUEST ERROR"
+        );
+
         console.error(err);
-        return res.status(500).json(ApiResponse.error("Server error", 500));
+
+        return res.status(500).json(
+
+            ApiResponse.error(
+                "Server error",
+                500
+            )
+        );
     }
 });
+
+
+
+// // ================= Get Shop History Service Requests =================
+// router.post("/getShopHistoryServiceRequests", async (req, res) => {
+//     console.log("-----API Get History Service Requests By ShopId-----");
+
+//     try {
+//         const { id } = req.body;
+
+//         if (!id) {
+//             console.log("shopId are required", req.body);
+//             return res.status(400).json(
+//                 ApiResponse.error("Shop ID are required", 400)
+//             );
+//         }
+
+//         const requests = await ServiceRequest.find({
+//             shopId: id,
+//             status: { $in: ["completed", "cancelled"] }
+//         }).sort({ createdAt: -1 });
+
+//         const response = await Promise.all(
+//             requests.map(async (request) => {
+//                 const shop = await Shop.findById(request.shopId).select("shopName supportedVehicles");
+//                 const service = await Services.findById(request.serviceId).select("service");
+//                 const customer = await Customer.findById(request.customerId).select("name");
+
+//                 return {
+//                     _id: request._id,
+//                     customerId: request.customerId,
+//                     customerName: customer ? customer.name : "",
+//                     shopId: request.shopId,
+//                     shopName: shop ? shop.shopName : "",
+//                     mechanicId: request.mechanicId,
+//                     vehicleId: request.vehicleId,
+//                     serviceId: request.serviceId,
+//                     serviceName: service ? service.service : "",
+//                     problemDescription: request.problemDescription,
+//                     status: request.status,
+//                     totalPrice: request.totalPrice,
+//                     totalDistance: request.totalDistance,
+//                     totalDuration: request.totalDuration,
+//                     paymentStatus: request.paymentStatus,
+//                     createdAt: request.createdAt
+//                 };
+//             })
+//         );
+
+//         console.log("History service fetched successfully", response);
+//         return res.status(200).json(
+//             ApiResponse.success("History service requests fetched successfully", response)
+//         );
+
+//     } catch (err) {
+//         console.error(err);
+//         return res.status(500).json(ApiResponse.error("Server error", 500));
+//     }
+// });
+
+
 
 
 // ================= Get Worker History Service Requests =================
 router.post("/getWorkerHistoryServiceRequests", async (req, res) => {
-    console.log("-----API Get Worker History Service Requests-----");
+
+    console.log(
+        "-----API Get Worker History Service Requests-----"
+    );
 
     try {
-        const { mechanicId, shopId } = req.body;
 
+        const {
+            mechanicId,
+            shopId
+        } = req.body;
+
+        /*
+         * VALIDATION
+         */
         if (!shopId || !mechanicId) {
-            console.log("shopId and mechanicId are required", req.body);
+
+            console.log(
+                "shopId and mechanicId are required",
+                req.body
+            );
+
             return res.status(400).json(
-                ApiResponse.error("Shop ID and Mechanic ID are required", 400)
+
+                ApiResponse.error(
+
+                    "Shop ID and Mechanic ID are required",
+
+                    400
+                )
             );
         }
 
-        const requests = await ServiceRequest.find({
-            shopId: shopId,
-            mechanicId: mechanicId,
-            status: { $in: ["completed", "cancelled"] }
-        }).sort({ createdAt: -1 });
+        /*
+         * FETCH HISTORY REQUESTS
+         */
+        const requests =
+            await ServiceRequest.find({
 
-        const response = await Promise.all(
-            requests.map(async (request) => {
-                const shop = await Shop.findById(request.shopId).select("shopName");
-                const service = await Services.findById(request.serviceId).select("service");
-                const customer = await Customer.findById(request.customerId).select("name");
+                shopId: shopId,
 
-                return {
-                    _id: request._id,
-                    customerId: request.customerId,
-                    customerName: customer ? customer.name : "",
-                    shopId: request.shopId,
-                    shopName: shop ? shop.shopName : "",
-                    mechanicId: request.mechanicId,
-                    vehicleId: request.vehicleId,
-                    serviceId: request.serviceId,
-                    serviceName: service ? service.service : "",
-                    problemDescription: request.problemDescription,
-                    status: request.status,
-                    totalPrice: request.totalPrice,
-                    totalDistance: request.totalDistance,
-                    totalDuration: request.totalDuration,
-                    paymentStatus: request.paymentStatus,
-                    createdAt: request.createdAt
-                };
+                mechanicId: mechanicId,
+
+                status: {
+
+                    $in: [
+
+                        "completed",
+
+                        "cancelled"
+                    ]
+                }
             })
+
+                /*
+                 * SHOP DETAILS
+                 */
+                .populate({
+
+                    path: "shopId",
+
+                    select:
+                        "shopName supportedVehicles"
+                })
+
+                /*
+                 * SERVICE DETAILS
+                 */
+                .populate({
+
+                    path: "serviceId",
+
+                    select:
+                        "service description price"
+                })
+
+                /*
+                 * CUSTOMER DETAILS
+                 */
+                .populate({
+
+                    path: "customerId",
+
+                    select:
+                        "name profileImage phoneNumber"
+                })
+
+                /*
+                 * MECHANIC DETAILS
+                 */
+                .populate({
+
+                    path: "mechanicId",
+
+                    select:
+                        "name profileImage"
+                })
+
+                .sort({
+                    createdAt: -1
+                });
+
+        /*
+         * EMPTY RESPONSE
+         */
+        if (!requests.length) {
+
+            return res.status(200).json(
+
+                ApiResponse.success(
+
+                    "No worker history requests found",
+
+                    []
+                )
+            );
+        }
+
+        /*
+         * FORMAT RESPONSE
+         */
+        const response =
+            requests.map(request => ({
+
+                _id:
+                    request._id,
+
+                /*
+                 * CUSTOMER
+                 */
+                customerId:
+                    request.customerId?._id || null,
+
+                customerName:
+                    request.customerId?.name || "",
+
+                customerProfile:
+                    request.customerId?.profileImage || "",
+
+                customerPhone:
+                    request.customerId?.phoneNumber || "",
+
+                /*
+                 * SHOP
+                 */
+                shopId:
+                    request.shopId?._id || null,
+
+                shopName:
+                    request.shopId?.shopName || "",
+
+                supportedVehicles:
+                    request.shopId?.supportedVehicles || [],
+
+                /*
+                 * MECHANIC
+                 */
+                mechanicId:
+                    request.mechanicId?._id || null,
+
+                mechanicName:
+                    request.mechanicId?.name || "",
+
+                mechanicProfile:
+                    request.mechanicId?.profileImage || "",
+
+                /*
+                 * VEHICLE
+                 */
+                vehicleId:
+                    request.vehicleId,
+
+                /*
+                 * SERVICE
+                 */
+                serviceId:
+                    request.serviceId?._id || null,
+
+                serviceName:
+                    request.serviceId?.service || "",
+
+                serviceDescription:
+                    request.serviceId?.description || "",
+
+                servicePrice:
+                    request.serviceId?.price || 0,
+
+                /*
+                 * REQUEST
+                 */
+                problemDescription:
+                    request.problemDescription,
+
+                status:
+                    request.status,
+
+                totalPrice:
+                    request.totalPrice,
+
+                totalDistance:
+                    request.totalDistance,
+
+                totalDuration:
+                    request.totalDuration,
+
+                paymentStatus:
+                    request.paymentStatus,
+
+                /*
+                 * REQUEST IMAGES
+                 */
+                requestImages:
+                    request.requestImages || [],
+
+                /*
+                 * CUSTOMER LOCATION
+                 */
+                customerLocation:
+
+                    request.customerLocation
+                        ?.location
+                        ?.coordinates
+
+                        ? {
+
+                            latitude:
+
+                                request
+                                    .customerLocation
+                                    .location
+                                    .coordinates[1],
+
+                            longitude:
+
+                                request
+                                    .customerLocation
+                                    .location
+                                    .coordinates[0],
+
+                            address:
+                                request
+                                    .customerLocation
+                                    .address
+                        }
+
+                        : null,
+
+                /*
+                 * MECHANIC LOCATION
+                 */
+                mechanicLocation:
+
+                    request.mechanicLocation
+                        ?.location
+                        ?.coordinates
+
+                        ? {
+
+                            latitude:
+
+                                request
+                                    .mechanicLocation
+                                    .location
+                                    .coordinates[1],
+
+                            longitude:
+
+                                request
+                                    .mechanicLocation
+                                    .location
+                                    .coordinates[0],
+
+                            address:
+                                request
+                                    .mechanicLocation
+                                    .address
+                        }
+
+                        : null,
+
+                createdAt:
+                    request.createdAt
+            }));
+
+        /*
+         * SUCCESS RESPONSE
+         */
+        console.log(
+            "History service requests fetched successfully"
         );
 
-        console.log("History service requests fetched successfully", response);
         return res.status(200).json(
-            ApiResponse.success("History service requests fetched successfully", response)
+
+            ApiResponse.success(
+
+                "History service requests fetched successfully",
+
+                response
+            )
         );
 
     } catch (err) {
+
+        console.error(
+            "GET WORKER HISTORY REQUEST ERROR"
+        );
+
         console.error(err);
-        return res.status(500).json(ApiResponse.error("Server error", 500));
+
+        return res.status(500).json(
+
+            ApiResponse.error(
+                "Server error",
+                500
+            )
+        );
     }
 });
+
+
+
+// // ================= Get Worker History Service Requests =================
+// router.post("/getWorkerHistoryServiceRequests", async (req, res) => {
+//     console.log("-----API Get Worker History Service Requests-----");
+
+//     try {
+//         const { mechanicId, shopId } = req.body;
+
+//         if (!shopId || !mechanicId) {
+//             console.log("shopId and mechanicId are required", req.body);
+//             return res.status(400).json(
+//                 ApiResponse.error("Shop ID and Mechanic ID are required", 400)
+//             );
+//         }
+
+//         const requests = await ServiceRequest.find({
+//             shopId: shopId,
+//             mechanicId: mechanicId,
+//             status: { $in: ["completed", "cancelled"] }
+//         }).sort({ createdAt: -1 });
+
+//         const response = await Promise.all(
+//             requests.map(async (request) => {
+//                 const shop = await Shop.findById(request.shopId).select("shopName supportedVehicles");
+//                 const service = await Services.findById(request.serviceId).select("service");
+//                 const customer = await Customer.findById(request.customerId).select("name");
+
+//                 return {
+//                     _id: request._id,
+//                     customerId: request.customerId,
+//                     customerName: customer ? customer.name : "",
+//                     shopId: request.shopId,
+//                     shopName: shop ? shop.shopName : "",
+//                     mechanicId: request.mechanicId,
+//                     vehicleId: request.vehicleId,
+//                     serviceId: request.serviceId,
+//                     serviceName: service ? service.service : "",
+//                     problemDescription: request.problemDescription,
+//                     status: request.status,
+//                     totalPrice: request.totalPrice,
+//                     totalDistance: request.totalDistance,
+//                     totalDuration: request.totalDuration,
+//                     paymentStatus: request.paymentStatus,
+//                     createdAt: request.createdAt
+//                 };
+//             })
+//         );
+
+//         console.log("History service requests fetched successfully", response);
+//         return res.status(200).json(
+//             ApiResponse.success("History service requests fetched successfully", response)
+//         );
+
+//     } catch (err) {
+//         console.error(err);
+//         return res.status(500).json(ApiResponse.error("Server error", 500));
+//     }
+// });
 
 
 // ==================== Get User Data ==========================
@@ -1541,7 +3460,6 @@ router.post("/getUserData", async (req, res) => {
 
 
 
-// const { emitRemoveRequest, emitOrderStatusUpdate, emitSOSAccepted } = require("../../utils/socket/socket");
 
 // router.post("/acceptServiceRequest", async (req, res) => {
 
@@ -1680,7 +3598,6 @@ router.post("/getUserData", async (req, res) => {
 //     }
 // });
 
-const { emitSOSAccepted } = require("../../utils/socket/socket");
 
 router.post("/acceptServiceRequest", async (req, res) => {
 
@@ -1966,6 +3883,12 @@ router.post("/startServiceRequest", async (req, res) => {
 
         request.status = "in_progress";
 
+        emitOrderStatusUpdate(request._id.toString(), {
+
+            orderId: request._id.toString(),
+
+            status: request.status
+        });
         await request.save();
 
         console.log("Service moved to in_progress:", request._id);
@@ -2041,7 +3964,7 @@ router.post("/completeServiceRequest", async (req, res) => {
             );
         }
 
-        if (request.status !== "in_progress") {
+        if (request.status !== "in_progress" && request.status !== "accepted") {
             console.log("Invalid status transition", request);
             return res.status(400).json(
                 ApiResponse.error("Invalid status transition", 400)
@@ -2057,8 +3980,8 @@ router.post("/completeServiceRequest", async (req, res) => {
 
         await request.save();
 
-        emitOrderStatusUpdate(request._id, {
-            orderId: request._id,
+        emitOrderStatusUpdate(request._id.toString(), {
+            orderId: request._id.toString(),
             status: request.status
         });
 
@@ -2472,7 +4395,7 @@ router.post("/getShopDetails", async (req, res) => {
         }
 
         const shop = await Shop.findById(shopId)
-            .select("shopName phoneNumber rating address status openingTime closingTime");
+            .select("shopName phoneNumber rating address status openingTime closingTime supportedVehicles");
 
         if (!shop) {
             return res.status(404).json(
@@ -2493,3 +4416,294 @@ router.post("/getShopDetails", async (req, res) => {
 });
 
 module.exports = router;
+
+
+// ================= GET COMPLETE MECHANIC DATA =================
+
+router.post(
+    "/getCompleteMechanicData",
+
+    async (req, res) => {
+
+        console.log(
+            "-----API Get Complete Mechanic Data-----"
+        );
+
+        try {
+
+            /*
+             * GET BODY
+             */
+            const {
+                id
+            } = req.body;
+
+            const mechanicId = id;
+
+            console.log("Request Data", req.body);
+            /*
+             * VALIDATION
+             */
+            if (!mechanicId) {
+                console.log(
+                    "mechanicId is required", req.body
+                );
+
+                return res.status(400).json(
+
+                    ApiResponse.error(
+                        "mechanicId is required",
+                        400
+                    )
+                );
+            }
+
+            /*
+             * GET MECHANIC
+             */
+            const mechanic =
+                await Mechanic.findById(
+                    mechanicId
+                );
+
+            if (!mechanic) {
+
+                console.log(
+                    "mechanic not found", req.body
+                );
+
+                return res.status(404).json(
+                    ApiResponse.error(
+                        "Mechanic not found",
+                        404
+                    )
+                );
+            }
+
+            /*
+             * GET SHOP
+             */
+            let shop = null;
+
+            if (mechanic.shopId) {
+
+                shop =
+                    await Shop.findById(
+                        mechanic.shopId
+                    );
+            }
+
+            /*
+             * GET SERVICES
+             */
+            let services = [];
+
+            if (mechanic.shopId) {
+
+                services =
+                    await Services.find({
+
+                        shopId:
+                            mechanic.shopId
+                    });
+            }
+
+            /*
+             * FORMAT MECHANIC
+             */
+            const mechanicResponse = {
+
+                _id:
+                    mechanic._id,
+
+                shopId:
+                    mechanic.shopId,
+
+                profileImage:
+                    mechanic.profileImage,
+
+                name:
+                    mechanic.name,
+
+                phoneNumber:
+                    mechanic.phoneNumber,
+
+                role:
+                    mechanic.role,
+
+                address:
+                    mechanic.address,
+
+                location:
+                    mechanic.location?.coordinates
+                        ? {
+
+                            latitude:
+                                mechanic.location.coordinates[1],
+
+                            longitude:
+                                mechanic.location.coordinates[0]
+                        }
+                        : null,
+
+                status:
+                    mechanic.status,
+
+                fcmToken:
+                    mechanic.fcmToken,
+
+                createdAt:
+                    mechanic.createdAt,
+
+                updatedAt:
+                    mechanic.updatedAt
+            };
+
+            /*
+             * FORMAT SHOP
+             */
+            let shopResponse = null;
+
+            if (shop) {
+
+                shopResponse = {
+
+                    _id:
+                        shop._id,
+
+                    ownerId:
+                        shop.ownerId,
+
+                    shopImage:
+                        shop.shopImage,
+
+
+                    rating: shop.rating,
+                    ratingCount: shop.ratingCount,
+                    ratingSum: shop.ratingSum,
+
+                    shopName:
+                        shop.shopName,
+
+                    phoneNumber:
+                        shop.phoneNumber,
+
+                    address:
+                        shop.address,
+
+                    location:
+                        shop.location?.coordinates
+                            ? {
+
+                                latitude:
+                                    shop.location.coordinates[1],
+
+                                longitude:
+                                    shop.location.coordinates[0]
+                            }
+                            : null,
+
+                    status:
+                        shop.status,
+
+                    rating:
+                        shop.rating,
+
+                    openingTime:
+                        shop.openingTime,
+
+                    closingTime:
+                        shop.closingTime,
+
+                    supportedVehicles:
+                        shop.supportedVehicles,
+
+                    workers:
+                        shop.workers,
+
+                    fcmToken:
+                        shop.fcmToken,
+
+                    createdAt:
+                        shop.createdAt,
+
+                    updatedAt:
+                        shop.updatedAt
+                };
+            }
+
+            /*
+             * FORMAT SERVICES
+             */
+            const servicesResponse =
+                services.map(service => ({
+
+                    _id:
+                        service._id,
+
+                    shopId:
+                        service.shopId,
+
+                    service:
+                        service.service,
+
+                    description:
+                        service.description,
+
+                    price:
+                        service.price
+                }));
+
+            /*
+             * FINAL RESPONSE
+             */
+
+            console.log("Complete mechanic data fetched successfully", {
+
+                mechanic:
+                    mechanicResponse,
+
+                shop:
+                    shopResponse,
+
+                services:
+                    servicesResponse
+            });
+            return res.status(200).json(
+
+                ApiResponse.success(
+
+                    "Complete mechanic data fetched successfully",
+
+                    {
+
+                        mechanic:
+                            mechanicResponse,
+
+                        shop:
+                            shopResponse,
+
+                        services:
+                            servicesResponse
+                    }
+                )
+            );
+
+        } catch (err) {
+
+            console.error(
+                "GET COMPLETE MECHANIC DATA ERROR"
+            );
+
+            console.error(err);
+
+            return res.status(500).json(
+
+                ApiResponse.error(
+                    "Server error",
+                    500
+                )
+            );
+        }
+    }
+);

@@ -6,6 +6,10 @@ const mechanicSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "Shop",
         },
+        profileImage: {
+            type: String,
+            default: "",
+        },
         name: {
             type: String,
             required: true,

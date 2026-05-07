@@ -120,7 +120,12 @@ const serviceRequestSchema = new mongoose.Schema(
                 type: mongoose.Schema.Types.ObjectId,
                 ref: "Shop"
             }
-        ]
+        ],
+        requestImages: [
+            {
+                type: String
+            }
+        ],
     },
     {
         timestamps: true

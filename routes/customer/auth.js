@@ -8,6 +8,7 @@ const Vehicle = require("../../models/Vehicle");
 const Shop = require("../../models/Shop");
 const Services = require("../../models/Services");
 const ServiceRequest = require("../../models/ServiceRequest");
+const ShopRating = require("../../models/ShopRating");
 const admin = require("../../utils/firebase/firebase");
 const { sendNotificationToShop } = require("../../utils/notification/notificationServices");
 
@@ -482,6 +483,8 @@ router.post("/nearbyShops", async (req, res) => {
                     address: 1,
                     openingTime: 1,
                     closingTime: 1,
+                    supportedVehicles: 1,
+                    shopImage: 1,
 
                     latitude: { $arrayElemAt: ["$location.coordinates", 1] },
                     longitude: { $arrayElemAt: ["$location.coordinates", 0] },
@@ -725,129 +728,404 @@ router.post("/nearbyShops", async (req, res) => {
 
 const { emitNewRequest, emitRemoveRequest } = require("../../utils/socket/socket");
 
-router.post("/createRequest", async (req, res) => {
+const upload =
+    require("../../middleware/upload");
 
-    console.log("-----API Create Request-----");
+router.post(
 
-    try {
+    "/createRequest",
 
-        const {
-            customerId,
-            shopId,
-            vehicleId,
-            serviceId,
-            problemDescription,
-            customerLocation,
-            totalPrice,
-            totalDistance,
-            totalDuration
-        } = req.body;
+    upload.array("requestImages", 5),
 
-        if (
-            !customerId ||
-            !shopId ||
-            !vehicleId ||
-            !serviceId ||
-            !problemDescription ||
-            !customerLocation ||
-            !customerLocation.address ||
-            customerLocation.latitude === undefined ||
-            customerLocation.longitude === undefined
-        ) {
-            return res.status(400).json(
-                ApiResponse.error("Missing required fields", 400)
+    async (req, res) => {
+
+        console.log("-----API Create Request-----");
+
+        try {
+
+            const {
+
+                customerId,
+                shopId,
+                vehicleId,
+                serviceId,
+                problemDescription,
+                customerLocation,
+                totalPrice,
+                totalDistance,
+                totalDuration
+
+            } = req.body;
+
+            console.log("Received service request: ", req.body);
+            /*
+             * PARSE LOCATION
+             */
+            let parsedLocation = customerLocation;
+
+            if (typeof customerLocation === "string") {
+
+                parsedLocation =
+                    JSON.parse(customerLocation);
+            }
+
+            /*
+             * VALIDATION
+             */
+            if (
+                !customerId ||
+                !shopId ||
+                !vehicleId ||
+                !serviceId ||
+                !problemDescription
+            ) {
+
+                console.log("Missing required fields ", req.body);
+                return res.status(400).json(
+
+                    ApiResponse.error(
+                        "Missing required fields",
+                        400
+                    )
+                );
+            }
+
+            /*
+             * IMAGE URLS
+             */
+            let requestImages = [];
+
+            if (req.files && req.files.length > 0) {
+
+                requestImages =
+                    req.files.map(
+                        file => file.path
+                    );
+            }
+
+            /*
+             * CREATE REQUEST
+             */
+            const request =
+                await ServiceRequest.create({
+
+                    customerId,
+
+                    shopId,
+
+                    vehicleId,
+
+                    serviceId,
+
+                    problemDescription,
+
+                    requestImages,
+
+                    customerLocation: {
+
+                        address:
+                            parsedLocation.address,
+
+                        location: {
+
+                            type: "Point",
+
+                            coordinates: [
+
+                                parseFloat(
+                                    parsedLocation.longitude
+                                ),
+
+                                parseFloat(
+                                    parsedLocation.latitude
+                                )
+                            ]
+                        }
+                    },
+
+                    totalPrice,
+                    totalDistance,
+                    totalDuration
+
+                });
+
+            /*
+            * FETCH CUSTOMER
+            */
+            const customer =
+                await Customer.findById(
+                    customerId
+                );
+
+            /*
+             * FETCH SERVICE
+             */
+            const service =
+                await Services.findById(
+                    serviceId
+                );
+
+            /*
+             * SOCKET DATA
+             */
+            const socketData = {
+
+                _id: request._id,
+
+                customerId:
+                    request.customerId,
+
+                customerName:
+                    customer?.name || "",
+
+                shopId:
+                    request.shopId,
+
+                vehicleId:
+                    request.vehicleId,
+
+                serviceId:
+                    request.serviceId,
+
+                serviceName:
+                    service?.service || "",
+
+                serviceDescription:
+                    service?.description || "",
+
+                problemDescription:
+                    request.problemDescription,
+
+                requestImages:
+                    request.requestImages,
+
+                status:
+                    request.status,
+
+                totalPrice:
+                    request.totalPrice,
+
+                totalDistance:
+                    request.totalDistance,
+
+                totalDuration:
+                    request.totalDuration,
+
+                paymentStatus:
+                    request.paymentStatus,
+
+                customerLocation: {
+
+                    latitude:
+                        request.customerLocation
+                            .location
+                            .coordinates[1],
+
+                    longitude:
+                        request.customerLocation
+                            .location
+                            .coordinates[0],
+
+                    address:
+                        request.customerLocation
+                            .address
+                },
+
+                createdAt:
+                    request.createdAt
+            };
+
+            /*
+             * SOCKET EMIT
+             */
+            emitNewRequest(
+                shopId,
+                socketData
+            );
+
+            /*
+             * NOTIFICATION
+             */
+            await sendNotificationToShop(
+                shopId,
+                {
+                    title:
+                        "New Service Request 🚗",
+
+                    body:
+                        "New service request received",
+
+                    data: {
+
+                        title:
+                            "New Service Request 🚗",
+
+                        body:
+                            "Customer requested service",
+
+                        serviceId:
+                            request._id.toString(),
+
+                        requestStatus:
+                            request.status,
+
+                        type:
+                            "SERVICE_REQUEST"
+                    }
+                }
+            );
+
+            console.log("Request created successfully ", socketData);
+            /*
+             * RESPONSE
+             */
+            return res.status(201).json(
+
+                ApiResponse.success(
+                    "Request created successfully",
+
+                    socketData
+                )
+            );
+
+        } catch (err) {
+
+            console.error(err);
+
+            return res.status(500).json(
+
+                ApiResponse.error(
+                    "Failed to create request",
+                    500
+                )
             );
         }
-
-        const request = await ServiceRequest.create({
-
-            customerId,
-            shopId,
-            vehicleId,
-            serviceId,
-            problemDescription,
-
-            customerLocation: {
-                address: customerLocation.address,
-                location: {
-                    type: "Point",
-                    coordinates: [
-                        parseFloat(customerLocation.longitude),
-                        parseFloat(customerLocation.latitude)
-                    ]
-                }
-            },
-
-            totalPrice,
-            totalDistance,
-            totalDuration
-        });
-
-        // ================= SOCKET (🔥 MOST IMPORTANT FIX) =================
-
-        // 🔥 Format data same as Android expects
-        const socketData = {
-            _id: request._id,
-            customerId: request.customerId,
-            shopId: request.shopId,
-            vehicleId: request.vehicleId,
-            serviceId: request.serviceId,
-            problemDescription: request.problemDescription,
-            status: request.status,
-            totalPrice: request.totalPrice,
-            totalDistance: request.totalDistance,
-            totalDuration: request.totalDuration,
-            paymentStatus: request.paymentStatus,
-
-            customerLocation: {
-                latitude: request.customerLocation.location.coordinates[1],
-                longitude: request.customerLocation.location.coordinates[0],
-                address: request.customerLocation.address
-            },
-
-            createdAt: request.createdAt
-        };
-
-        // 🔥 Emit FULL request to all mechanics in shop
-        emitNewRequest(shopId, socketData);
-
-        // ================================================================
-
-
-        // ================= FCM NOTIFICATION =================
-
-        await sendNotificationToShop(shopId, {
-            title: "New Service Request 🚗",
-            body: "Your shop have received a new service request",
-            data: {
-                title: "New Service Request 🚗",
-                body: "A customer has requested a mechanic service",
-                serviceId: request._id.toString(),
-                requestStatus: request.status,
-                type: "SERVICE_REQUEST"
-            }
-        });
-
-        // =========================================================
-
-
-        // ================= RESPONSE =================
-
-        const response = socketData;
-
-        return res.status(201).json(
-            ApiResponse.success("Request created successfully", response)
-        );
-
-    } catch (err) {
-
-        console.error(err);
-
-        return res.status(500).json(
-            ApiResponse.error("Failed to create request", 500)
-        );
     }
-});
+);
+
+// router.post("/createRequest", async (req, res) => {
+
+//     console.log("-----API Create Request-----");
+
+//     try {
+
+//         const {
+//             customerId,
+//             shopId,
+//             vehicleId,
+//             serviceId,
+//             problemDescription,
+//             customerLocation,
+//             totalPrice,
+//             totalDistance,
+//             totalDuration
+//         } = req.body;
+
+//         if (
+//             !customerId ||
+//             !shopId ||
+//             !vehicleId ||
+//             !serviceId ||
+//             !problemDescription ||
+//             !customerLocation ||
+//             !customerLocation.address ||
+//             customerLocation.latitude === undefined ||
+//             customerLocation.longitude === undefined
+//         ) {
+//             return res.status(400).json(
+//                 ApiResponse.error("Missing required fields", 400)
+//             );
+//         }
+
+//         const request = await ServiceRequest.create({
+
+//             customerId,
+//             shopId,
+//             vehicleId,
+//             serviceId,
+//             problemDescription,
+
+//             customerLocation: {
+//                 address: customerLocation.address,
+//                 location: {
+//                     type: "Point",
+//                     coordinates: [
+//                         parseFloat(customerLocation.longitude),
+//                         parseFloat(customerLocation.latitude)
+//                     ]
+//                 }
+//             },
+
+//             totalPrice,
+//             totalDistance,
+//             totalDuration
+//         });
+
+//         // ================= SOCKET (🔥 MOST IMPORTANT FIX) =================
+
+//         // 🔥 Format data same as Android expects
+//         const socketData = {
+//             _id: request._id,
+//             customerId: request.customerId,
+//             shopId: request.shopId,
+//             vehicleId: request.vehicleId,
+//             serviceId: request.serviceId,
+//             problemDescription: request.problemDescription,
+//             status: request.status,
+//             totalPrice: request.totalPrice,
+//             totalDistance: request.totalDistance,
+//             totalDuration: request.totalDuration,
+//             paymentStatus: request.paymentStatus,
+
+//             customerLocation: {
+//                 latitude: request.customerLocation.location.coordinates[1],
+//                 longitude: request.customerLocation.location.coordinates[0],
+//                 address: request.customerLocation.address
+//             },
+
+//             createdAt: request.createdAt
+//         };
+
+//         // 🔥 Emit FULL request to all mechanics in shop
+//         emitNewRequest(shopId, socketData);
+
+//         // ================================================================
+
+
+//         // ================= FCM NOTIFICATION =================
+
+//         await sendNotificationToShop(shopId, {
+//             title: "New Service Request 🚗",
+//             body: "Your shop have received a new service request",
+//             data: {
+//                 title: "New Service Request 🚗",
+//                 body: "A customer has requested a mechanic service",
+//                 serviceId: request._id.toString(),
+//                 requestStatus: request.status,
+//                 type: "SERVICE_REQUEST"
+//             }
+//         });
+
+//         // =========================================================
+
+
+//         // ================= RESPONSE =================
+
+//         const response = socketData;
+
+//         return res.status(201).json(
+//             ApiResponse.success("Request created successfully", response)
+//         );
+
+//     } catch (err) {
+
+//         console.error(err);
+
+//         return res.status(500).json(
+//             ApiResponse.error("Failed to create request", 500)
+//         );
+//     }
+// });
 
 
 
@@ -1082,8 +1360,32 @@ router.post("/getServiceRequest", async (req, res) => {
         }
 
         // Get shop name and service name using IDs
-        const shop = await Shop.findById(request.shopId).select("shopName ownerId workers");
+        const shop = await Shop.findById(request.shopId).select(
+            `
+                shopName
+                ownerId
+                workers
+                supportedVehicles
+                rating
+                ratingCount
+                ratingSum
+                `
+        );
         const service = await Services.findById(request.serviceId).select("service");
+
+        const customer =
+            await Customer.findById(
+                request.customerId
+            ).select(
+                "name phoneNumber"
+            );
+
+        const mechanic =
+            await Mechanic.findById(
+                request.mechanicId
+            ).select(
+                "name phoneNumber"
+            );
 
         // ===============================
         // Calculate total mechanics
@@ -1113,50 +1415,183 @@ router.post("/getServiceRequest", async (req, res) => {
         }
 
         const response = {
-            _id: request._id,
-            customerId: request.customerId,
-            shopId: request.shopId,
-            mechanicId: request.mechanicId,
-            vehicleId: request.vehicleId,
-            serviceId: request.serviceId,
 
-            // Added Names
-            shopName: shop ? shop.shopName : "",
-            serviceName: service ? service.service : "",
+            _id:
+                request._id,
 
-            problemDescription: request.problemDescription,
-            status: request.status,
-            totalPrice: request.totalPrice,
-            totalDistance: request.totalDistance,
-            totalDuration: request.totalDuration,
-            paymentStatus: request.paymentStatus,
+            /*
+             * CUSTOMER DETAILS
+             */
+            customerId:
+                request.customerId,
 
+            customerName:
+                customer
+                    ? customer.name
+                    : "",
+
+            customerPhoneNumber:
+                customer
+                    ? customer.phoneNumber
+                    : "",
+
+            /*
+             * SHOP DETAILS
+             */
+            shopId:
+                request.shopId,
+
+            shopName:
+                shop
+                    ? shop.shopName
+                    : "",
+
+            supportedVehicles:
+                shop?.supportedVehicles || [],
+
+            /*
+             * MECHANIC DETAILS
+             */
+            mechanicId:
+                request.mechanicId,
+
+            mechanicName:
+                mechanic
+                    ? mechanic.name
+                    : "",
+
+            mechanicPhoneNumber:
+                mechanic
+                    ? mechanic.phoneNumber
+                    : "",
+
+            isSOS: request.isSOS,
+            /*
+             * VEHICLE DETAILS
+             */
+            vehicleId:
+                request.vehicleId,
+
+            /*
+             * SERVICE DETAILS
+             */
+            serviceId:
+                request.serviceId,
+
+            serviceName:
+                service
+                    ? service.service
+                    : "",
+
+            serviceDescription:
+                service
+                    ? (
+                        service.description ||
+                        ""
+                    )
+                    : "",
+
+            serviceAmount:
+                service
+                    ? (
+                        service.amount ||
+                        service.price ||
+                        0
+                    )
+                    : 0,
+
+            /*
+             * SHOP RATING
+             */
+            shopRating:
+                shop?.rating || 0,
+
+            shopRatingCount:
+                shop?.ratingCount || 0,
+
+            shopRatingSum:
+                shop?.ratingSum || 0,
+
+            /*
+             * REQUEST DETAILS
+             */
+            problemDescription:
+                request.problemDescription,
+
+            status:
+                request.status,
+
+            totalPrice:
+                request.totalPrice,
+
+            totalDistance:
+                request.totalDistance,
+
+            totalDuration:
+                request.totalDuration,
+
+            paymentStatus:
+                request.paymentStatus,
+
+            /*
+             * REJECTION DETAILS
+             */
             rejectedCount,
+
             totalMechanics,
+
             isCompletelyRejected,
 
-            customerLocation: request.customerLocation
-                ? {
-                    latitude:
-                        request.customerLocation.location.coordinates[1],
-                    longitude:
-                        request.customerLocation.location.coordinates[0],
-                    address: request.customerLocation.address
-                }
-                : null,
-
-            mechanicLocation:
-                request.mechanicLocation?.location?.coordinates
+            /*
+             * CUSTOMER LOCATION
+             */
+            customerLocation:
+                request.customerLocation
                     ? {
+
                         latitude:
-                            request.mechanicLocation.location.coordinates[1],
+                            request.customerLocation
+                                .location
+                                .coordinates[1],
+
                         longitude:
-                            request.mechanicLocation.location.coordinates[0],
-                        address: request.mechanicLocation.address
+                            request.customerLocation
+                                .location
+                                .coordinates[0],
+
+                        address:
+                            request.customerLocation
+                                .address
                     }
                     : null,
 
-            createdAt: request.createdAt
+            /*
+             * MECHANIC LOCATION
+             */
+            mechanicLocation:
+                request.mechanicLocation?.location?.coordinates
+
+                    ? {
+
+                        latitude:
+                            request.mechanicLocation
+                                .location
+                                .coordinates[1],
+
+                        longitude:
+                            request.mechanicLocation
+                                .location
+                                .coordinates[0],
+
+                        address:
+                            request.mechanicLocation
+                                .address
+                    }
+
+                    : null,
+
+            createdAt:
+                request.createdAt
         };
 
         console.log("Service Request Data :", response);
@@ -1224,6 +1659,7 @@ router.post("/getServiceRequestHistory", async (req, res) => {
 
                     shopName:
                         shop ? shop.shopName : "",
+                    supportedVehicles: shop?.supportedVehicles || [],
 
                     serviceName:
                         service ? service.service : "",
@@ -1639,33 +2075,61 @@ router.post("/confirmServiceCompletion", async (req, res) => {
 
         // ================= SEND FCM NOTIFICATION =================
 
+        // ================= SEND FCM NOTIFICATION =================
+
         try {
 
-            const mechanic = await Mechanic.findById(request.mechanicId);
+            const mechanic =
+                await Mechanic.findById(
+                    request.mechanicId
+                );
 
             if (mechanic?.fcmToken) {
+
                 await admin.messaging().send({
-                    title: "Service Completed ✅",
-                    body: "Customer confirmed the service completion",
-                    token: mechanic.fcmToken,
+
+                    token:
+                        mechanic.fcmToken,
+
                     notification: {
-                        title: "Service Completed ✅",
-                        body: "Customer confirmed the service completion"
+
+                        title:
+                            "Service Completed ✅",
+
+                        body:
+                            "Customer confirmed service completion"
                     },
+
                     data: {
-                        title: "Service Completed ✅",
-                        body: "Customer confirmed the service completion",
-                        serviceId: request._id.toString(),
-                        requestStatus: request.status,
-                        type: "SERVICE_COMPLETED"
+
+                        title:
+                            "Service Completed ✅",
+
+                        body:
+                            "Customer confirmed service completion",
+
+                        serviceId:
+                            request._id.toString(),
+
+                        requestStatus:
+                            request.status,
+
+                        type:
+                            "SERVICE_COMPLETED"
                     }
                 });
 
-                console.log("Notification sent to mechanic");
+                console.log(
+                    "Notification sent to mechanic"
+                );
             }
 
         } catch (notifyErr) {
-            console.error("Notification error:", notifyErr);
+
+            console.error(
+                "Notification error:",
+                notifyErr
+            );
         }
 
         // =========================================================
@@ -1790,170 +2254,828 @@ router.post("/updateLocation", async (req, res) => {
     }
 });
 
+
 // ==================== Add / Update Shop Rating ==========================
 router.post("/rateShop", async (req, res) => {
+
     console.log("-----API Rate Shop-----");
 
     try {
-        const { shopId, userId, rating } = req.body;
 
-        if (!shopId || !userId || rating === undefined) {
+        let {
+            shopId,
+            userId,
+            rating
+        } = req.body;
+
+        console.log(
+            "shopId, userId and rating :",
+            req.body
+        );
+
+        /*
+         * VALIDATION
+         */
+        if (
+            !shopId ||
+            !userId ||
+            rating === undefined
+        ) {
+
             return res.status(400).json(
-                ApiResponse.error("shopId, userId and rating are required", 400)
+                ApiResponse.error(
+                    "shopId, userId and rating are required",
+                    400
+                )
             );
         }
 
-        if (typeof rating !== "number" || rating < 0 || rating > 5) {
+        /*
+         * CONVERT TO NUMBER
+         */
+        rating =
+            parseFloat(rating);
+
+        /*
+         * VALIDATE
+         */
+        if (
+            isNaN(rating) ||
+            rating < 0 ||
+            rating > 5
+        ) {
+
             return res.status(400).json(
-                ApiResponse.error("Rating must be between 0 and 5", 400)
+                ApiResponse.error(
+                    "Rating must be between 0 and 5",
+                    400
+                )
             );
         }
 
-        const shop = await Shop.findById(shopId);
+        /*
+         * FIND SHOP
+         */
+        const shop =
+            await Shop.findById(shopId);
 
         if (!shop) {
+
             return res.status(404).json(
-                ApiResponse.error("Shop not found", 404)
+                ApiResponse.error(
+                    "Shop not found",
+                    404
+                )
             );
         }
 
-        const existingRating = await ShopRating.findOne({ shopId, userId });
-
-        if (existingRating) {
-
-            const oldRating = existingRating.rating;
-
-            existingRating.rating = rating;
-            await existingRating.save();
-
-            shop.ratingSum = shop.ratingSum - oldRating + rating;
-
-        } else {
-
-            await ShopRating.create({
+        /*
+         * FIND EXISTING USER RATING
+         */
+        const existingRating =
+            await ShopRating.findOne({
                 shopId,
-                userId,
-                rating
+                userId
             });
 
-            shop.ratingCount += 1;
-            shop.ratingSum += rating;
+        /*
+         * UPDATE EXISTING
+         */
+        if (existingRating) {
+
+            existingRating.rating =
+                rating;
+
+            await existingRating.save();
         }
 
-        shop.rating = shop.ratingCount === 0
-            ? 0
-            : shop.ratingSum / shop.ratingCount;
+        /*
+         * CREATE NEW
+         */
+        else {
 
+            await ShopRating.create({
+
+                shopId,
+
+                userId,
+
+                rating
+            });
+        }
+
+        /*
+         * RECALCULATE FROM DATABASE
+         */
+        const allRatings =
+            await ShopRating.find({
+                shopId
+            });
+
+        /*
+         * TOTAL COUNT
+         */
+        const ratingCount =
+            allRatings.length;
+
+        /*
+         * TOTAL SUM
+         */
+        const ratingSum =
+            allRatings.reduce(
+
+                (sum, item) =>
+
+                    sum + Number(item.rating || 0),
+
+                0
+            );
+
+        /*
+         * AVERAGE
+         */
+        const averageRating =
+
+            ratingCount > 0
+
+                ? ratingSum / ratingCount
+
+                : 0;
+
+        /*
+         * UPDATE SHOP
+         */
+        shop.rating =
+            Number(
+                averageRating.toFixed(1)
+            );
+
+        shop.ratingCount =
+            ratingCount;
+
+        shop.ratingSum =
+            ratingSum;
+
+        /*
+         * SAVE SHOP
+         */
         await shop.save();
 
+        console.log({
+
+            rating:
+                shop.rating,
+
+            ratingCount:
+                shop.ratingCount,
+
+            ratingSum:
+                shop.ratingSum
+        });
+
         return res.status(200).json(
-            ApiResponse.success("Rating submitted successfully", {
-                rating: shop.rating,
-                ratingCount: shop.ratingCount
-            })
+
+            ApiResponse.success(
+
+                "Rating submitted successfully",
+
+                {
+                    rating:
+                        shop.rating,
+
+                    ratingCount:
+                        shop.ratingCount,
+
+                    ratingSum:
+                        shop.ratingSum
+                }
+            )
         );
 
     } catch (err) {
 
-        if (err.code === 11000) {
-            return res.status(400).json(
-                ApiResponse.error("You have already rated this shop", 400)
-            );
-        }
+        console.error(
+            "RATE SHOP ERROR"
+        );
 
         console.error(err);
 
         return res.status(500).json(
-            ApiResponse.error("Server error", 500)
+
+            ApiResponse.error(
+
+                err.message ||
+
+                "Server error",
+
+                500
+            )
         );
     }
 });
 
+
+// // ==================== Add / Update Shop Rating ==========================
+// router.post("/rateShop", async (req, res) => {
+
+//     console.log("-----API Rate Shop-----");
+
+//     try {
+
+//         let {
+//             shopId,
+//             userId,
+//             rating
+//         } = req.body;
+
+//         /*
+//          * VALIDATION
+//          */
+//         if (
+//             !shopId ||
+//             !userId ||
+//             rating === undefined
+//         ) {
+
+//             console.log(
+//                 "shopId, userId and rating are required",
+//                 req.body
+//             );
+
+//             return res.status(400).json(
+//                 ApiResponse.error(
+//                     "shopId, userId and rating are required",
+//                     400
+//                 )
+//             );
+//         }
+
+//         /*
+//          * CONVERT RATING TO NUMBER
+//          */
+//         rating = Number(rating);
+
+//         /*
+//          * VALIDATE RATING
+//          */
+//         if (
+//             isNaN(rating) ||
+//             rating < 0 ||
+//             rating > 5
+//         ) {
+
+//             console.log(
+//                 "Rating must be between 0 and 5",
+//                 req.body
+//             );
+
+//             return res.status(400).json(
+//                 ApiResponse.error(
+//                     "Rating must be between 0 and 5",
+//                     400
+//                 )
+//             );
+//         }
+
+//         /*
+//          * FIND SHOP
+//          */
+//         const shop =
+//             await Shop.findById(shopId);
+
+//         if (!shop) {
+
+//             console.log(
+//                 "Shop not found",
+//                 req.body
+//             );
+
+//             return res.status(404).json(
+//                 ApiResponse.error(
+//                     "Shop not found",
+//                     404
+//                 )
+//             );
+//         }
+
+//         /*
+//          * SAFETY DEFAULTS
+//          */
+//         if (
+//             typeof shop.ratingCount !== "number"
+//         ) {
+
+//             shop.ratingCount = 0;
+//         }
+
+//         if (
+//             typeof shop.ratingSum !== "number"
+//         ) {
+
+//             shop.ratingSum = 0;
+//         }
+
+//         /*
+//          * CHECK EXISTING RATING
+//          */
+//         const existingRating =
+//             await ShopRating.findOne({
+//                 shopId,
+//                 userId
+//             });
+
+//         /*
+//          * UPDATE EXISTING RATING
+//          */
+//         if (existingRating) {
+
+//             const oldRating =
+//                 existingRating.rating || 0;
+
+//             existingRating.rating =
+//                 rating;
+
+//             await existingRating.save();
+
+//             /*
+//              * UPDATE TOTAL SUM
+//              */
+//             shop.ratingSum =
+//                 shop.ratingSum -
+//                 oldRating +
+//                 rating;
+//         }
+
+//         /*
+//          * CREATE NEW RATING
+//          */
+//         else {
+
+//             await ShopRating.create({
+
+//                 shopId,
+
+//                 userId,
+
+//                 rating
+//             });
+
+//             shop.ratingCount += 1;
+
+//             shop.ratingSum += rating;
+//         }
+
+//         /*
+//          * CALCULATE AVERAGE RATING
+//          */
+//         shop.rating =
+//             shop.ratingCount > 0
+
+//                 ? Number(
+//                     (
+//                         shop.ratingSum /
+//                         shop.ratingCount
+//                     ).toFixed(1)
+//                 )
+
+//                 : 0;
+
+//         /*
+//          * SAVE SHOP
+//          */
+//         await shop.save();
+
+//         console.log(
+//             "Rating submitted successfully",
+//             {
+//                 rating: shop.rating,
+//                 ratingCount:
+//                     shop.ratingCount
+//             }
+//         );
+
+//         /*
+//          * SUCCESS RESPONSE
+//          */
+//         return res.status(200).json(
+
+//             ApiResponse.success(
+//                 "Rating submitted successfully",
+
+//                 {
+//                     rating:
+//                         shop.rating,
+
+//                     ratingCount:
+//                         shop.ratingCount
+//                 }
+//             )
+//         );
+
+//     } catch (err) {
+
+//         console.error(
+//             "RATE SHOP ERROR"
+//         );
+
+//         console.error(err);
+
+//         return res.status(500).json(
+
+//             ApiResponse.error(
+//                 err.message ||
+//                 "Server error",
+//                 500
+//             )
+//         );
+//     }
+// });
+
+
+
 // ================= Get Live Requested Requests =================
 router.post("/getLiveRequestedRequest", async (req, res) => {
-    console.log("-----API Get Live Requested Requests-----");
+
+    console.log(
+        "-----API Get Live Requested Requests-----"
+    );
 
     try {
 
         const { id } = req.body;
+
         const customerId = id;
 
+        /*
+         * VALIDATION
+         */
         if (!customerId) {
-            console.log("Customer Id is required : ", customerId);
+
+            console.log(
+                "Customer Id is required : ",
+                customerId
+            );
+
             return res.status(400).json(
-                ApiResponse.error("customerId is required", 400)
+
+                ApiResponse.error(
+                    "customerId is required",
+                    400
+                )
             );
         }
 
-        // 🔥 Fetch only LIVE requests (active statuses)
-        const requests = await ServiceRequest.find({
-            customerId,
-            status: {
-                $in: [
-                    "requested",
-                    "accepted",
-                    "in_progress",
-                    "waiting_for_confirmation"
-                ]
-            }
-        })
-            .sort({ createdAt: -1 }) // 🔥 Latest first
-            .limit(20); // optional limit
+        /*
+         * FETCH LIVE REQUESTS
+         */
+        const requests =
+            await ServiceRequest.find({
 
-        if (!requests || requests.length === 0) {
+                customerId,
+
+                status: {
+
+                    $in: [
+
+                        "requested",
+
+                        "accepted",
+
+                        "in_progress",
+
+                        "waiting_for_confirmation"
+                    ]
+                }
+            })
+
+                /*
+                 * SHOP DETAILS
+                 */
+                .populate({
+
+                    path: "shopId",
+
+                    select:
+                        "shopName supportedVehicles"
+                })
+
+                /*
+                 * SERVICE DETAILS
+                 */
+                .populate({
+
+                    path: "serviceId",
+
+                    select:
+                        "service description"
+                })
+
+                /*
+                 * MECHANIC DETAILS
+                 */
+                .populate({
+
+                    path: "mechanicId",
+
+                    select:
+                        "name"
+                })
+
+                .sort({
+                    createdAt: -1
+                })
+
+                .limit(20);
+
+        /*
+         * EMPTY RESPONSE
+         */
+        if (
+            !requests ||
+            requests.length === 0
+        ) {
+
             return res.status(404).json(
-                ApiResponse.error("No live requests found", 404)
+
+                ApiResponse.error(
+                    "No live requests found",
+                    404
+                )
             );
         }
 
-        // 🔥 Format response exactly like Android expects
-        const formatted = requests.map(req => ({
+        /*
+         * FORMAT RESPONSE
+         */
+        const formatted =
+            requests.map(request => ({
 
-            _id: req._id,
-            customerId: req.customerId,
-            shopId: req.shopId,
-            mechanicId: req.mechanicId,
-            vehicleId: req.vehicleId,
-            serviceId: req.serviceId,
-            problemDescription: req.problemDescription,
+                _id:
+                    request._id,
 
-            totalPrice: req.totalPrice,
-            totalDistance: req.totalDistance,
-            totalDuration: req.totalDuration,
+                customerId:
+                    request.customerId,
 
-            status: req.status,
-            paymentStatus: req.paymentStatus,
+                shopId:
+                    request.shopId?._id || null,
 
-            customerLocation: req.customerLocation?.location?.coordinates
-                ? {
-                    latitude: req.customerLocation.location.coordinates[1],
-                    longitude: req.customerLocation.location.coordinates[0],
-                    address: req.customerLocation.address
-                }
-                : null,
+                mechanicId:
+                    request.mechanicId?._id || null,
 
-            mechanicLocation: req.mechanicLocation?.location?.coordinates
-                ? {
-                    latitude: req.mechanicLocation.location.coordinates[1],
-                    longitude: req.mechanicLocation.location.coordinates[0],
-                    address: req.mechanicLocation.address
-                }
-                : null,
+                vehicleId:
+                    request.vehicleId,
 
-            createdAt: req.createdAt
-        }));
+                serviceId:
+                    request.serviceId?._id || null,
 
+                /*
+                 * SHOP DETAILS
+                 */
+                shopName:
+                    request.shopId?.shopName || "",
+
+                supportedVehicles:
+                    request.shopId
+                        ?.supportedVehicles || [],
+
+                /*
+                 * SERVICE DETAILS
+                 */
+                serviceName:
+                    request.serviceId
+                        ?.service || "",
+
+                serviceDescription:
+                    request.serviceId
+                        ?.description || "",
+
+                /*
+                 * MECHANIC DETAILS
+                 */
+                mechanicName:
+                    request.mechanicId
+                        ?.name || "",
+
+                /*
+                 * REQUEST DETAILS
+                 */
+                problemDescription:
+                    request.problemDescription,
+
+                totalPrice:
+                    request.totalPrice,
+
+                totalDistance:
+                    request.totalDistance,
+
+                totalDuration:
+                    request.totalDuration,
+
+                status:
+                    request.status,
+
+                paymentStatus:
+                    request.paymentStatus,
+
+                /*
+                 * CUSTOMER LOCATION
+                 */
+                customerLocation:
+
+                    request.customerLocation
+                        ?.location
+                        ?.coordinates
+
+                        ? {
+
+                            latitude:
+
+                                request
+                                    .customerLocation
+                                    .location
+                                    .coordinates[1],
+
+                            longitude:
+
+                                request
+                                    .customerLocation
+                                    .location
+                                    .coordinates[0],
+
+                            address:
+                                request
+                                    .customerLocation
+                                    .address
+                        }
+
+                        : null,
+
+                /*
+                 * MECHANIC LOCATION
+                 */
+                mechanicLocation:
+
+                    request.mechanicLocation
+                        ?.location
+                        ?.coordinates
+
+                        ? {
+
+                            latitude:
+
+                                request
+                                    .mechanicLocation
+                                    .location
+                                    .coordinates[1],
+
+                            longitude:
+
+                                request
+                                    .mechanicLocation
+                                    .location
+                                    .coordinates[0],
+
+                            address:
+                                request
+                                    .mechanicLocation
+                                    .address
+                        }
+
+                        : null,
+
+                createdAt:
+                    request.createdAt
+            }));
+
+        /*
+         * SUCCESS RESPONSE
+         */
         return res.status(200).json(
-            ApiResponse.success("Live requests fetched successfully", formatted)
+
+            ApiResponse.success(
+
+                "Live requests fetched successfully",
+
+                formatted
+            )
         );
 
     } catch (err) {
+
+        console.error(
+            "GET LIVE REQUEST ERROR"
+        );
+
         console.error(err);
+
         return res.status(500).json(
-            ApiResponse.error("Server error", 500)
+
+            ApiResponse.error(
+                "Server error",
+                500
+            )
         );
     }
 });
+
+
+
+// // ================= Get Live Requested Requests =================
+// router.post("/getLiveRequestedRequest", async (req, res) => {
+//     console.log("-----API Get Live Requested Requests-----");
+
+//     try {
+
+//         const { id } = req.body;
+//         const customerId = id;
+
+//         if (!customerId) {
+//             console.log("Customer Id is required : ", customerId);
+//             return res.status(400).json(
+//                 ApiResponse.error("customerId is required", 400)
+//             );
+//         }
+
+//         // 🔥 Fetch only LIVE requests (active statuses)
+//         const requests = await ServiceRequest.find({
+//             customerId,
+//             status: {
+//                 $in: [
+//                     "requested",
+//                     "accepted",
+//                     "in_progress",
+//                     "waiting_for_confirmation"
+//                 ]
+//             }
+//         })
+//             .sort({ createdAt: -1 }) // 🔥 Latest first
+//             .limit(20); // optional limit
+
+//         const shop = await Shop.findById(req.shopId)
+//             .select(
+//                 "shopName supportedVehicles"
+//             );
+
+//         if (!requests || requests.length === 0) {
+//             return res.status(404).json(
+//                 ApiResponse.error("No live requests found", 404)
+//             );
+//         }
+
+//         // 🔥 Format response exactly like Android expects
+//         const formatted = requests.map(req => ({
+
+//             _id: req._id,
+//             customerId: req.customerId,
+//             shopId: req.shopId,
+//             mechanicId: req.mechanicId,
+//             vehicleId: req.vehicleId,
+//             serviceId: req.serviceId,
+//             problemDescription: req.problemDescription,
+
+//             totalPrice: req.totalPrice,
+//             totalDistance: req.totalDistance,
+//             totalDuration: req.totalDuration,
+
+//             shopName:
+//                 shop?.shopName || "",
+
+//             supportedVehicles:
+//                 shop?.supportedVehicles || [],
+
+//             status: req.status,
+//             paymentStatus: req.paymentStatus,
+
+//             customerLocation: req.customerLocation?.location?.coordinates
+//                 ? {
+//                     latitude: req.customerLocation.location.coordinates[1],
+//                     longitude: req.customerLocation.location.coordinates[0],
+//                     address: req.customerLocation.address
+//                 }
+//                 : null,
+
+//             mechanicLocation: req.mechanicLocation?.location?.coordinates
+//                 ? {
+//                     latitude: req.mechanicLocation.location.coordinates[1],
+//                     longitude: req.mechanicLocation.location.coordinates[0],
+//                     address: req.mechanicLocation.address
+//                 }
+//                 : null,
+
+//             createdAt: req.createdAt
+//         }));
+
+//         return res.status(200).json(
+//             ApiResponse.success("Live requests fetched successfully", formatted)
+//         );
+
+//     } catch (err) {
+//         console.error(err);
+//         return res.status(500).json(
+//             ApiResponse.error("Server error", 500)
+//         );
+//     }
+// });
 
 // ================= Get Mechanic Details =================
 router.post("/getMechanicDetails", async (req, res) => {
@@ -2005,7 +3127,7 @@ router.post("/getShopDetails", async (req, res) => {
         }
 
         const shop = await Shop.findById(shopId)
-            .select("shopName phoneNumber rating address status openingTime closingTime");
+            .select("shopImage shopName phoneNumber rating address status openingTime closingTime supportedVehicles");
 
         if (!shop) {
             return res.status(404).json(
