@@ -865,6 +865,15 @@ router.post(
                     serviceId
                 );
 
+            const vehicle = await Vehicle.findById(request.vehicleId).select(
+                `
+                vehicleType
+                vehicleBrand
+                vehicleModel
+                registrationNumber
+                `
+            );
+
             /*
              * SOCKET DATA
              */
@@ -883,6 +892,16 @@ router.post(
 
                 vehicleId:
                     request.vehicleId,
+
+                vehicle: vehicle
+                    ? {
+                        _id: vehicle._id,
+                        vehicleType: vehicle.vehicleType,
+                        vehicleBrand: vehicle.vehicleBrand,
+                        vehicleModel: vehicle.vehicleModel,
+                        registrationNumber: vehicle.registrationNumber
+                    }
+                    : null,
 
                 serviceId:
                     request.serviceId,
@@ -1387,6 +1406,18 @@ router.post("/getServiceRequest", async (req, res) => {
                 "name phoneNumber"
             );
 
+        const vehicle =
+            await Vehicle.findById(
+                request.vehicleId
+            ).select(
+                `
+        vehicleType
+        vehicleBrand
+        vehicleModel
+        registrationNumber
+        `
+            );
+
         // ===============================
         // Calculate total mechanics
         // ===============================
@@ -1471,6 +1502,17 @@ router.post("/getServiceRequest", async (req, res) => {
              */
             vehicleId:
                 request.vehicleId,
+
+            vehicle:
+                vehicle
+                    ? {
+                        _id: vehicle._id,
+                        vehicleType: vehicle.vehicleType,
+                        vehicleBrand: vehicle.vehicleBrand,
+                        vehicleModel: vehicle.vehicleModel,
+                        registrationNumber: vehicle.registrationNumber
+                    }
+                    : null,
 
             /*
              * SERVICE DETAILS
